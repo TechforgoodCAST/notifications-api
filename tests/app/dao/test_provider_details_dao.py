@@ -120,8 +120,8 @@ def test_update_sms_provider_to_inactive_sets_inactive(restore_provider_details)
 
 
 @pytest.mark.parametrize('identifier, expected', [
-    ('firetext', 'mmg'),
-    ('mmg', 'firetext'),
+    ('firetext', 'twilio'),
+    ('mmg', 'twilio'),
 ])
 def test_get_alternative_sms_provider_returns_expected_provider(identifier, expected):
     assert get_alternative_sms_provider(identifier) == expected
