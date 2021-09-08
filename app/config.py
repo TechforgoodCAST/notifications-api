@@ -161,7 +161,7 @@ class Config(object):
 
     # these should always add up to 100%
     SMS_PROVIDER_RESTING_POINTS = {
-        'mmg': 50,
+        'twilio': 50,
         'firetext': 50
     }
 
