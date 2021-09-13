@@ -1,8 +1,8 @@
-# GOV.UK Notify API
+# CAST Notify API
 
 Contains:
-- the public-facing REST API for GOV.UK Notify, which teams can integrate with using [our clients](https://www.notifications.service.gov.uk/documentation)
-- an internal-only REST API built using Flask to manage services, users, templates, etc (this is what the [admin app](http://github.com/alphagov/notifications-admin) talks to)
+- the public-facing REST API for CAST Notify, which teams can integrate with using [our clients](https://notifications.thecatalyst.org.uk/documentation)
+- an internal-only REST API built using Flask to manage services, users, templates, etc (this is what the [admin app](http://github.com/TechforgoodCAST/notifications-admin) talks to)
 - asynchronous workers built using Celery to put things on queues and read them off to be processed, sent to providers, updated, etc
 
 ## Setting Up
