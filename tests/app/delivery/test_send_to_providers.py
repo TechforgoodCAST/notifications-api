@@ -645,7 +645,7 @@ def test_should_send_sms_to_international_providers(
 
     # set firetext to active
     firetext_provider.priority = 100
-    twilio_provider.priority = 10
+    twilio_provider.priority = 0
 
     notification_uk = create_notification(
         template=sample_template,
