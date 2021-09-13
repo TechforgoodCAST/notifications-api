@@ -166,7 +166,7 @@ def provider_to_use(notification_type, international=False):
         )
         raise Exception("No active {} providers".format(notification_type))
 
-    chosen_provider = random.choices(active_providers, weights=[p.priority for p in active_providers])[0]
+    chosen_provider = random.choices(active_providers)[0]
 
     return notification_provider_clients.get_client_by_name_and_type(chosen_provider.identifier, notification_type)
 
