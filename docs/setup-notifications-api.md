@@ -42,11 +42,10 @@ docker-compose -f docker/docker-compose-development.yml up
 
  ## Bootstrapping the notifications-api application for local development
 
- Finally, we can run the one-off `scripts/bootstrap.sh` script, configuring our local development environment with minimal fuss and effort.
-
- ```
- scripts/bootstrap.sh
- ```
+  Next, we can install dependencies, configuring our local development environment with minimal fuss and effort.
+  ```
+  make bootstrap
+  ```
 
  ## How to run the application
 

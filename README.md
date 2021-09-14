@@ -57,7 +57,7 @@ To switch redis on you'll need to install it locally. On a OSX we've used brew f
 ##  To run the application
 
 # install dependencies, etc.
-./scripts/bootstrap.sh
+make bootstrap
 
 # run the web app
 ```
@@ -78,7 +78,7 @@ make run-celery-beat
 ##  To test the application
 
 # install dependencies, etc.
-./scripts/bootstrap.sh
+make bootstrap
 
 ```
 make test
