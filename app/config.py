@@ -115,10 +115,6 @@ class Config(object):
     EXPIRE_CACHE_TEN_MINUTES = 600
     EXPIRE_CACHE_EIGHT_DAYS = 8 * 24 * 60 * 60
 
-    # Performance platform
-    PERFORMANCE_PLATFORM_ENABLED = False
-    PERFORMANCE_PLATFORM_URL = 'https://www.performance.service.gov.uk/data/govuk-notify/'
-
     # Zendesk
     ZENDESK_API_KEY = get_env_var('ZENDESK_API_KEY')
 
@@ -275,11 +271,6 @@ class Config(object):
         'delete-inbound-sms': {
             'task': 'delete-inbound-sms',
             'schedule': crontab(hour=1, minute=40),
-            'options': {'queue': QueueNames.PERIODIC}
-        },
-        'send-daily-performance-platform-stats': {
-            'task': 'send-daily-performance-platform-stats',
-            'schedule': crontab(hour=2, minute=0),
             'options': {'queue': QueueNames.PERIODIC}
         },
         'save-daily-notification-processing-time': {
