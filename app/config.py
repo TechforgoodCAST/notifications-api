@@ -1,9 +1,10 @@
-from datetime import timedelta
-import os
 import json
+import os
+from datetime import timedelta
 
 from celery.schedules import crontab
 from kombu import Exchange, Queue
+
 from app.utils import get_env_var
 
 if get_env_var('VCAP_SERVICES'):

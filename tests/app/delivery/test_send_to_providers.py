@@ -2,7 +2,7 @@ import json
 import uuid
 from collections import namedtuple
 from datetime import datetime, timedelta
-from unittest.mock import Mock, ANY
+from unittest.mock import ANY, Mock
 
 import pytest
 from flask import current_app
@@ -10,28 +10,28 @@ from notifications_utils.recipients import validate_and_format_phone_number
 from requests import HTTPError
 
 import app
-from app import notification_provider_clients, firetext_client, twilio_client
+from app import firetext_client, notification_provider_clients, twilio_client
 from app.dao import notifications_dao
 from app.dao.provider_details_dao import get_all_active_providers
 from app.delivery import send_to_providers
 from app.exceptions import NotificationTechnicalFailureException
 from app.models import (
-    Notification,
-    EmailBranding,
-    KEY_TYPE_NORMAL,
-    KEY_TYPE_TEST,
-    KEY_TYPE_TEAM,
-    BRANDING_ORG,
     BRANDING_BOTH,
-    BRANDING_ORG_BANNER
+    BRANDING_ORG,
+    BRANDING_ORG_BANNER,
+    KEY_TYPE_NORMAL,
+    KEY_TYPE_TEAM,
+    KEY_TYPE_TEST,
+    EmailBranding,
+    Notification,
 )
 from tests.app.db import (
-    create_service,
-    create_template,
     create_notification,
     create_reply_to_email,
+    create_service,
     create_service_sms_sender,
-    create_service_with_defined_sms_sender
+    create_service_with_defined_sms_sender,
+    create_template,
 )
 
 
@@ -211,7 +211,10 @@ def test_send_sms_should_use_template_version_from_notification_not_latest(
     version_on_notification = sample_template.version
 
     # Change the template
-    from app.dao.templates_dao import dao_update_template, dao_get_template_by_id
+    from app.dao.templates_dao import (
+        dao_get_template_by_id,
+        dao_update_template,
+    )
     sample_template.content = sample_template.content + " another version of the template"
     dao_update_template(sample_template)
     t = dao_get_template_by_id(sample_template.id)

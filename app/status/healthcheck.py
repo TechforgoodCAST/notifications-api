@@ -1,10 +1,7 @@
-from flask import (
-    jsonify,
-    Blueprint
-)
+from flask import Blueprint, jsonify
 
-from app.dao.services_dao import dao_count_live_services
 from app.dao.organisation_dao import dao_count_organisations_with_live_services
+from app.dao.services_dao import dao_count_live_services
 
 status = Blueprint('status', __name__)
 

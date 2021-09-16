@@ -1,10 +1,11 @@
 import json
-from urllib.parse import urljoin
 from time import monotonic
+from urllib.parse import urljoin
 
-from app.clients.sms import (SmsClient, SmsClientResponseException)
-from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
+from twilio.rest import Client
+
+from app.clients.sms import SmsClient, SmsClientResponseException
 
 
 def get_twilio_responses(status, detailed_status_code=None):
