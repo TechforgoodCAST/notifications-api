@@ -163,6 +163,12 @@ def format_sequential_number(sequential_number):
     return format(sequential_number, "x").zfill(8)
 
 
+def get_reference_from_personalisation(personalisation):
+    if personalisation:
+        return personalisation.get("reference")
+    return None
+
+
 def get_string_or_default(val, default=None):
     return val or default
 
