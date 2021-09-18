@@ -116,7 +116,7 @@ def create_app(application):
                                                         twilio_client],
                                            email_clients=email_clients)
 
-    notify_celery.init_app(application, statsd_client)
+    notify_celery.init_app(application)
     encryption.init_app(application)
     redis_store.init_app(application)
     document_download_client.init_app(application)
