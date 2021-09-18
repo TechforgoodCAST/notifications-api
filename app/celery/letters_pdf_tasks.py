@@ -6,7 +6,6 @@ from botocore.exceptions import ClientError as BotoClientError
 from flask import current_app
 from notifications_utils.letter_timings import LETTER_PROCESSING_DEADLINE
 from notifications_utils.postal_address import PostalAddress
-from notifications_utils.statsd_decorators import statsd
 from notifications_utils.timezones import convert_utc_to_bst
 
 from app import encryption, notify_celery
@@ -50,13 +49,11 @@ from app.models import (
 
 
 @notify_celery.task(bind=True, name="create-letters-pdf", max_retries=15, default_retry_delay=300)
-@statsd(namespace="tasks")
 def create_letters_pdf(self, notification_id):
     get_pdf_for_templated_letter(notification_id)
 
 
 @notify_celery.task(bind=True, name="get-pdf-for-templated-letter", max_retries=15, default_retry_delay=300)
-@statsd(namespace="tasks")
 def get_pdf_for_templated_letter(self, notification_id):
     try:
         notification = get_notification_by_id(notification_id, _raise=True)
@@ -103,7 +100,6 @@ def get_pdf_for_templated_letter(self, notification_id):
 
 
 @notify_celery.task(bind=True, name="update-billable-units-for-letter", max_retries=15, default_retry_delay=300)
-@statsd(namespace="tasks")
 def update_billable_units_for_letter(self, notification_id, page_count):
     notification = get_notification_by_id(notification_id, _raise=True)
 
