@@ -91,14 +91,7 @@ def test_apply_async_injects_global_request_id_into_kwargs(mocker, celery_task):
     g.request_id = '1234'
     celery_task.apply_async()
 
-    super_apply.assert_called_with(
-        None,
-        {'request_id': '1234'},
-        None,
-        None,
-        None,
-        None
-    )
+    super_apply.assert_called_with(kwargs={'request_id': '1234'})
 
 
 def test_apply_async_injects_id_into_kwargs_from_request(mocker, notify_api, celery_task):
@@ -109,11 +102,4 @@ def test_apply_async_injects_id_into_kwargs_from_request(mocker, notify_api, cel
     with notify_api.test_request_context(headers=request_headers):
         celery_task.apply_async()
 
-    super_apply.assert_called_with(
-        None,
-        {'request_id': '1234'},
-        None,
-        None,
-        None,
-        None
-    )
+    super_apply.assert_called_with(kwargs={'request_id': '1234'})
