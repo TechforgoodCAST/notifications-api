@@ -1113,14 +1113,14 @@ def test_search_for_users_by_email_handles_incorrect_data_format(notify_db, clie
 
 
 @freeze_time('2020-01-01 11:00')
-def test_verify_webauthn_login_resets_login_if_succesful(admin_request, sample_user):
+def test_complete_login_after_webauthn_authentication_attempt_resets_login_if_successful(admin_request, sample_user):
     sample_user.failed_login_count = 1
 
     assert sample_user.current_session_id is None
     assert sample_user.logged_in_at is None
 
     admin_request.post(
-        'user.verify_webauthn_login_for_user',
+        'user.complete_login_after_webauthn_authentication_attempt',
         user_id=sample_user.id,
         _data={'successful': True},
         _expected_status=204
@@ -1131,7 +1131,10 @@ def test_verify_webauthn_login_resets_login_if_succesful(admin_request, sample_u
     assert sample_user.logged_in_at == datetime(2020, 1, 1, 11, 0)
 
 
-def test_verify_webauthn_login_returns_204_when_not_successful(admin_request, sample_user):
+def test_complete_login_after_webauthn_authentication_attempt_returns_204_when_not_successful(
+    admin_request,
+    sample_user
+):
     # when unsuccessful this endpoint is used to bump the failed count. the endpoint still worked
     # properly so should return 204 (no content).
     sample_user.failed_login_count = 1
@@ -1140,7 +1143,7 @@ def test_verify_webauthn_login_returns_204_when_not_successful(admin_request, sa
     assert sample_user.logged_in_at is None
 
     admin_request.post(
-        'user.verify_webauthn_login_for_user',
+        'user.complete_login_after_webauthn_authentication_attempt',
         user_id=sample_user.id,
         _data={'successful': False},
         _expected_status=204
@@ -1151,7 +1154,10 @@ def test_verify_webauthn_login_returns_204_when_not_successful(admin_request, sa
     assert sample_user.logged_in_at is None
 
 
-def test_verify_webauthn_login_raises_403_if_max_login_count_exceeded(admin_request, sample_user):
+def test_complete_login_after_webauthn_authentication_attempt_raises_403_if_max_login_count_exceeded(
+    admin_request,
+    sample_user
+):
     # when unsuccessful this endpoint is used to bump the failed count. the endpoint still worked
     # properly so should return 204 (no content).
     sample_user.failed_login_count = 10
@@ -1168,9 +1174,9 @@ def test_verify_webauthn_login_raises_403_if_max_login_count_exceeded(admin_requ
     assert sample_user.logged_in_at is None
 
 
-def test_verify_webauthn_login_raises_400_if_schema_invalid(admin_request):
+def test_complete_login_after_webauthn_authentication_attempt_raises_400_if_schema_invalid(admin_request):
     admin_request.post(
-        'user.verify_webauthn_login_for_user',
+        'user.complete_login_after_webauthn_authentication_attempt',
         user_id=uuid.uuid4(),
         _data={'successful': 'True'},
         _expected_status=400
