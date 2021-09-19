@@ -1,5 +1,5 @@
-import uuid
 import json
+import uuid
 from datetime import datetime
 from unittest import mock
 
