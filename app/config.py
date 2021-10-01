@@ -86,8 +86,16 @@ class Config(object):
     # URL of api app (on AWS this is the internal api endpoint)
     API_HOST_NAME = get_env_var('API_HOST_NAME')
 
-    # secrets that internal apps, such as the admin app or document download, must use to authenticate with the API
+    # LEGACY: replacing with INTERNAL_CLIENT_API_KEYS
     API_INTERNAL_SECRETS = json.loads(get_env_var('API_INTERNAL_SECRETS', '[]'))
+
+    # secrets that internal apps, such as the admin app or document download, must use to authenticate with the API
+    ADMIN_CLIENT_ID = 'notify-admin'
+    GOVUK_ALERTS_CLIENT_ID = 'govuk-alerts'
+
+    INTERNAL_CLIENT_API_KEYS = {
+        ADMIN_CLIENT_ID: API_INTERNAL_SECRETS
+    }
 
     # encyption secret/salt
     SECRET_KEY = get_env_var('SECRET_KEY')
@@ -134,7 +142,6 @@ class Config(object):
     ###########################
 
     NOTIFY_ENVIRONMENT = 'development'
-    ADMIN_CLIENT_USER_NAME = 'notify-admin'
     AWS_REGION = 'eu-west-1'
     INVITATION_EXPIRATION_DAYS = 2
     NOTIFY_APP_NAME = 'api'
@@ -401,7 +408,10 @@ class Development(Config):
     TRANSIENT_UPLOADED_LETTERS = get_env_var('TRANSIENT_UPLOADED_LETTERS', 'development-transient-uploaded-letters')
     LETTER_SANITISE_BUCKET_NAME = get_env_var('LETTER_SANITISE_BUCKET_NAME', 'development-letters-sanitise')
 
-    API_INTERNAL_SECRETS = ['dev-notify-secret-key']
+    INTERNAL_CLIENT_API_KEYS = {
+        Config.ADMIN_CLIENT_ID: ['dev-notify-secret-key'],
+        Config.GOVUK_ALERTS_CLIENT_ID: ['govuk-alerts-secret-key']
+    }
     SECRET_KEY = 'dev-notify-secret-key'
     DANGEROUS_SALT = 'dev-notify-salt'
 
