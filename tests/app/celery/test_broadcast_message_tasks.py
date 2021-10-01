@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from unittest.mock import ANY, call
 
@@ -95,18 +94,6 @@ def test_send_broadcast_event_does_nothing_if_provider_set_on_service_isnt_enabl
 
     with set_config(notify_api, 'ENABLED_CBCS', ['ee', 'vodafone']):
         send_broadcast_event(event.id)
-
-    assert mock_send_broadcast_provider_message.apply_async.called is False
-
-
-def test_send_broadcast_event_does_nothing_if_cbc_proxy_disabled(mocker, notify_api):
-    mock_send_broadcast_provider_message = mocker.patch(
-        'app.celery.broadcast_message_tasks.send_broadcast_provider_message',
-    )
-
-    event_id = uuid.uuid4()
-    with set_config(notify_api, 'ENABLED_CBCS', ['ee', 'vodafone']), set_config(notify_api, 'CBC_PROXY_ENABLED', False):
-        send_broadcast_event(event_id)
 
     assert mock_send_broadcast_provider_message.apply_async.called is False
 
@@ -554,29 +541,14 @@ def test_send_broadcast_provider_message_delays_retry_exponentially(
     ['vodafone', 'Vodafone'],
 ])
 def test_trigger_link_tests_invokes_cbc_proxy_client(
-    mocker, provider, provider_capitalised
+    mocker, provider, provider_capitalised, client,
 ):
     mock_send_link_test = mocker.patch(
         f'app.clients.cbc_proxy.CBCProxy{provider_capitalised}.send_link_test',
     )
 
     trigger_link_test(provider)
-
-    assert mock_send_link_test.called
-    # the 0th argument of the call to send_link_test
-    identifier = mock_send_link_test.mock_calls[0][1][0]
-
-    try:
-        uuid.UUID(identifier)
-    except BaseException:
-        pytest.fail(f"{identifier} is not a valid uuid")
-
-    # testing sequential number:
-    if provider == 'vodafone':
-        assert type(mock_send_link_test.mock_calls[0][1][1]) is str
-        assert len(mock_send_link_test.mock_calls[0][1][1]) == 8
-    else:
-        assert not mock_send_link_test.mock_calls[0][1][1]
+    assert mock_send_link_test.called_once()
 
 
 @pytest.mark.parametrize('retry_count, expected_delay', [
