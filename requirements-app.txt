@@ -36,7 +36,7 @@ awscli-cwlogs==1.4.6
 
 # using my local version until I publicly push everything
 # https://github.com/bitzesty/notifications-utils/archive/catalyst.zip
-git+file:///home/kevin/Desktop/Python/catalyst-notifcations/notifications-utils#egg=notifications-utils==44.1.0
+git+file:///home/kevin/Desktop/Python/catalyst-notifcations/notifications-utils#egg=notifications-utils==44.4.2
 
 # gds-metrics requires prometheseus 0.2.0, override that requirement as 0.7.1 brings significant performance gains
 prometheus-client==0.10.1
