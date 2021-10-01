@@ -45,7 +45,7 @@ from app.models import (
     Template,
     TemplateHistory,
 )
-from tests import create_authorization_header
+from tests import create_service_authorization_header
 from tests.app.db import (
     create_api_key,
     create_inbound_number,
@@ -902,7 +902,7 @@ def admin_request(client):
         def get(endpoint, _expected_status=200, **endpoint_kwargs):
             resp = client.get(
                 url_for(endpoint, **(endpoint_kwargs or {})),
-                headers=[create_authorization_header()]
+                headers=[create_service_authorization_header()]
             )
             json_resp = resp.json
             assert resp.status_code == _expected_status
@@ -913,7 +913,7 @@ def admin_request(client):
             resp = client.post(
                 url_for(endpoint, **(endpoint_kwargs or {})),
                 data=json.dumps(_data),
-                headers=[('Content-Type', 'application/json'), create_authorization_header()]
+                headers=[('Content-Type', 'application/json'), create_service_authorization_header()]
             )
             if resp.get_data():
                 json_resp = resp.json
@@ -926,7 +926,7 @@ def admin_request(client):
         def delete(endpoint, _expected_status=204, **endpoint_kwargs):
             resp = client.delete(
                 url_for(endpoint, **(endpoint_kwargs or {})),
-                headers=[create_authorization_header()]
+                headers=[create_service_authorization_header()]
             )
             if resp.get_data():
                 json_resp = resp.json

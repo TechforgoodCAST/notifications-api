@@ -12,7 +12,7 @@ from app.dao.date_util import (
     get_month_start_and_end_date_in_utc,
 )
 from app.models import FactBilling
-from tests import create_authorization_header
+from tests import create_service_authorization_header
 from tests.app.db import (
     create_annual_billing,
     create_ft_billing,
@@ -37,7 +37,7 @@ def test_create_update_free_sms_fragment_limit_invalid_schema(client, sample_ser
 
     response = client.post('service/{}/billing/free-sms-fragment-limit'.format(sample_service.id),
                            data={},
-                           headers=[('Content-Type', 'application/json'), create_authorization_header()])
+                           headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
     json_resp = json.loads(response.get_data(as_text=True))
 
     assert response.status_code == 400
@@ -103,7 +103,7 @@ def test_get_free_sms_fragment_limit_current_year_creates_new_row(client, sample
 
     response_get = client.get(
         'service/{}/billing/free-sms-fragment-limit'.format(sample_service.id),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()])
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
 
     json_resp = json.loads(response_get.get_data(as_text=True))
     assert response_get.status_code == 200
@@ -122,7 +122,7 @@ def test_get_free_sms_fragment_limit_past_year_not_exist(client, sample_service)
     res_get = client.get(
         'service/{}/billing/free-sms-fragment-limit?financial_year_start={}'
         .format(sample_service.id, current_year - 2),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()])
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
     json_resp = json.loads(res_get.get_data(as_text=True))
 
     assert res_get.status_code == 200
@@ -141,7 +141,7 @@ def test_get_free_sms_fragment_limit_future_year_not_exist(client, sample_servic
     res_get = client.get(
         'service/{}/billing/free-sms-fragment-limit?financial_year_start={}'
         .format(sample_service.id, current_year + 2),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()])
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
     json_resp = json.loads(res_get.get_data(as_text=True))
 
     assert res_get.status_code == 200
@@ -170,7 +170,7 @@ def test_get_yearly_usage_by_monthly_from_ft_billing_populates_deltas(client, no
     assert FactBilling.query.count() == 0
 
     response = client.get('service/{}/billing/ft-monthly-usage?year=2018'.format(service.id),
-                          headers=[('Content-Type', 'application/json'), create_authorization_header()])
+                          headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
 
     assert response.status_code == 200
     assert len(json.loads(response.get_data(as_text=True))) == 1
@@ -202,7 +202,7 @@ def test_get_yearly_usage_by_monthly_from_ft_billing(client, notify_db_session):
                               postage='second')
 
     response = client.get('service/{}/billing/ft-monthly-usage?year=2016'.format(service.id),
-                          headers=[('Content-Type', 'application/json'), create_authorization_header()])
+                          headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
 
     json_resp = json.loads(response.get_data(as_text=True))
     ft_letters = [x for x in json_resp if x['notification_type'] == 'letter']
@@ -259,7 +259,7 @@ def set_up_yearly_data():
 def test_get_yearly_billing_usage_summary_from_ft_billing_returns_400_if_missing_year(client, sample_service):
     response = client.get(
         '/service/{}/billing/ft-yearly-usage-summary'.format(sample_service.id),
-        headers=[create_authorization_header()]
+        headers=[create_service_authorization_header()]
     )
     assert response.status_code == 400
     assert json.loads(response.get_data(as_text=True)) == {
@@ -272,7 +272,7 @@ def test_get_yearly_billing_usage_summary_from_ft_billing_returns_empty_list_if_
 ):
     response = client.get(
         '/service/{}/billing/ft-yearly-usage-summary?year=2016'.format(sample_service.id),
-        headers=[create_authorization_header()]
+        headers=[create_service_authorization_header()]
     )
     assert response.status_code == 200
     assert json.loads(response.get_data(as_text=True)) == []
@@ -282,7 +282,7 @@ def test_get_yearly_billing_usage_summary_from_ft_billing(client, notify_db_sess
     service = set_up_yearly_data()
 
     response = client.get('/service/{}/billing/ft-yearly-usage-summary?year=2016'.format(service.id),
-                          headers=[create_authorization_header()]
+                          headers=[create_service_authorization_header()]
                           )
     assert response.status_code == 200
     json_response = json.loads(response.get_data(as_text=True))
@@ -304,7 +304,7 @@ def test_get_yearly_billing_usage_summary_from_ft_billing(client, notify_db_sess
 def test_get_yearly_usage_by_monthly_from_ft_billing_all_cases(client, notify_db_session):
     service = set_up_data_for_all_cases()
     response = client.get('service/{}/billing/ft-monthly-usage?year=2018'.format(service.id),
-                          headers=[('Content-Type', 'application/json'), create_authorization_header()])
+                          headers=[('Content-Type', 'application/json'), create_service_authorization_header()])
 
     assert response.status_code == 200
     json_response = json.loads(response.get_data(as_text=True))
@@ -343,7 +343,7 @@ def test_get_yearly_usage_by_monthly_from_ft_billing_all_cases(client, notify_db
 def test_get_yearly_billing_usage_summary_from_ft_billing_all_cases(client, notify_db_session):
     service = set_up_data_for_all_cases()
     response = client.get('/service/{}/billing/ft-yearly-usage-summary?year=2018'.format(service.id),
-                          headers=[create_authorization_header()])
+                          headers=[create_service_authorization_header()])
     assert response.status_code == 200
     json_response = json.loads(response.get_data(as_text=True))
 
