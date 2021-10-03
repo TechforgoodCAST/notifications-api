@@ -149,7 +149,6 @@ class User(db.Model):
             return True
 
         return any(
-            str(service.organisation_id) == current_app.config['BROADCAST_ORGANISATION_ID'] or
             str(service.id) == current_app.config['NOTIFY_SERVICE_ID']
             for service in self.services
         )
