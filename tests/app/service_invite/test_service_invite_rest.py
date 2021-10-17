@@ -3,7 +3,6 @@ import uuid
 
 import pytest
 from flask import current_app
-
 from freezegun import freeze_time
 from notifications_utils.url_safe_token import generate_token
 

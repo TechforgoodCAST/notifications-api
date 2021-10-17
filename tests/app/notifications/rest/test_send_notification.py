@@ -126,7 +126,8 @@ def test_send_notification_with_placeholders_replaced(notify_api, sample_email_t
                     'name': 'Jo'
                 }
             }
-            auth_header = create_service_authorization_header(service_id=sample_email_template_with_placeholders.service.id)
+            auth_header = create_service_authorization_header(
+                service_id=sample_email_template_with_placeholders.service.id)
 
             response = client.post(
                 path='/notifications/email',
@@ -473,7 +474,8 @@ def test_should_not_send_email_if_team_api_key_and_not_a_service_user(notify_api
             'template': str(sample_email_template.id),
         }
 
-        auth_header = create_service_authorization_header(service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
+        auth_header = create_service_authorization_header(
+            service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
 
         response = client.post(
             path='/notifications/email',
@@ -523,7 +525,8 @@ def test_should_send_email_if_team_api_key_and_a_service_user(client, sample_ema
         'to': sample_email_template.service.created_by.email_address,
         'template': sample_email_template.id
     }
-    auth_header = create_service_authorization_header(service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
+    auth_header = create_service_authorization_header(
+        service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
 
     response = client.post(
         path='/notifications/email',

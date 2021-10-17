@@ -14,7 +14,6 @@ from notifications_python_client.errors import (
     TokenIssuerError,
 )
 from notifications_utils import request_helper
-
 from sqlalchemy.orm.exc import NoResultFound
 
 from app.serialised_models import SerialisedService

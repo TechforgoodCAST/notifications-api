@@ -26,7 +26,8 @@ def test_get_guest_list_separates_emails_and_phones(client, sample_service):
         ServiceGuestList.from_string(sample_service.id, MOBILE_TYPE, '+1800-555-555'),
     ])
 
-    response = client.get('service/{}/guest-list'.format(sample_service.id), headers=[create_service_authorization_header()])
+    response = client.get('service/{}/guest-list'.format(
+        sample_service.id), headers=[create_service_authorization_header()])
     assert response.status_code == 200
     json_resp = json.loads(response.get_data(as_text=True))
     assert json_resp['email_addresses'] == ['service@example.com']

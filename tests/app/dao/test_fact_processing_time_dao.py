@@ -45,6 +45,7 @@ def test_insert_update_processing_time(notify_db_session):
     assert result[0].created_at
     assert result[0].updated_at == datetime(2021, 2, 23, 13, 23, 33)
 
+
 def test_get_processing_time_percentage_for_date_range(notify_db_session):
     create_process_time(
         bst_date='2021-02-21',

@@ -119,7 +119,7 @@ def get_data_for_billing_report():
                 })
 
     # sorting first by name == '' means that blank orgs will be sorted last.
-    
+
     result = sorted(combined.values(), key=lambda x: (
         x['organisation_name'] == '',
         x['organisation_name'],

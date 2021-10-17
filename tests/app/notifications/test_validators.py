@@ -39,8 +39,6 @@ from app.v2.errors import BadRequestError, RateLimitError, TooManyRequestsError
 from tests.app.db import (
     create_api_key,
     create_letter_contact,
-    create_notification,
-    create_notification,
     create_reply_to_email,
     create_service,
     create_service_guest_list,

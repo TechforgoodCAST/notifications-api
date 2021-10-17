@@ -6,7 +6,6 @@ from app.config import QueueNames
 from app.dao.invited_org_user_dao import (
     get_invited_org_user as dao_get_invited_org_user,
 )
-
 from app.dao.invited_org_user_dao import (
     get_invited_org_user_by_id,
     get_invited_org_users_for_organisation,

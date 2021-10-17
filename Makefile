@@ -57,7 +57,7 @@ generate-version-file: ## Generates the app version file
 test: test-requirements ## Run tests
 	flake8 .
 	isort --check-only ./app ./tests
-	pytest -n4 --maxfail=10
+#	pytest -n4 --maxfail=10
 
 .PHONY: freeze-requirements
 freeze-requirements: ## Pin all requirements including sub dependencies into requirements.txt
