@@ -20,7 +20,7 @@
     },
   },
 
-  'notify-api-sms-callbacks': {
+    'notify-api-sms-receipts': {
     'NOTIFY_APP_NAME': 'api',
     'disk_quota': '2G',
     'additional_env_vars': {
@@ -117,9 +117,6 @@ applications:
       CRONITOR_KEYS: '{{ CRONITOR_KEYS | tojson }}'
 
       HIGH_VOLUME_SERVICE: '{{ HIGH_VOLUME_SERVICE | tojson }}'
-
-
-      PERFORMANCE_PLATFORM_ENDPOINTS: '{{ PERFORMANCE_PLATFORM_ENDPOINTS | tojson }}'
 
       DOCUMENT_DOWNLOAD_API_HOST: '{{ DOCUMENT_DOWNLOAD_API_HOST }}'
       DOCUMENT_DOWNLOAD_API_KEY: '{{ DOCUMENT_DOWNLOAD_API_KEY }}'

@@ -1,27 +1,33 @@
 import itertools
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from freezegun import freeze_time
 
-from app.config import QueueNames
 from app.celery.reporting_tasks import (
     create_nightly_billing,
-    create_nightly_notification_status,
     create_nightly_billing_for_day,
+    create_nightly_notification_status,
     create_nightly_notification_status_for_day,
 )
+from app.config import QueueNames
 from app.dao.fact_billing_dao import get_rate
 from app.models import (
-    FactBilling,
-    Notification,
-    LETTER_TYPE,
     EMAIL_TYPE,
-    SMS_TYPE, FactNotificationStatus
+    LETTER_TYPE,
+    SMS_TYPE,
+    FactBilling,
+    FactNotificationStatus,
+    Notification,
 )
-
-from tests.app.db import create_service, create_template, create_notification, create_rate, create_letter_rate
+from tests.app.db import (
+    create_letter_rate,
+    create_notification,
+    create_rate,
+    create_service,
+    create_template,
+)
 
 
 def mocker_get_rate(
@@ -370,6 +376,17 @@ def test_get_rate_for_letter_latest(notify_db_session):
     letter_rates = [new, old]
 
     rate = get_rate([], letter_rates, LETTER_TYPE, date(2018, 1, 1), True, 1)
+    assert rate == Decimal('0.33')
+
+
+def test_get_rate_for_letter_latest_if_crown_is_none(notify_db_session):
+    # letter rates should be passed into the get_rate function as a tuple of start_date, crown, sheet_count,
+    # rate and post_class
+    crown = create_letter_rate(datetime(2017, 12, 1), crown=True, sheet_count=1, rate=0.33, post_class='second')
+    non_crown = create_letter_rate(datetime(2017, 12, 1), crown=False, sheet_count=1, rate=0.35, post_class='second')
+    letter_rates = [crown, non_crown]
+
+    rate = get_rate([], letter_rates, LETTER_TYPE, date(2018, 1, 1), crown=None, letter_page_count=1)
     assert rate == Decimal('0.33')
 
 

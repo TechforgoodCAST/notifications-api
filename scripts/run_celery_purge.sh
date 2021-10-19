@@ -3,4 +3,4 @@
 set -e
 
 source environment.sh
-flask run -p 6011
+celery -A run_celery.notify_celery purge

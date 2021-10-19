@@ -5,10 +5,10 @@ import pytest
 from notifications_utils import SMS_CHAR_COUNT_LIMIT
 from notifications_utils.recipients import InvalidPhoneError
 
-from app.v2.errors import BadRequestError, TooManyRequestsError
 from app.config import QueueNames
-from app.dao.service_guest_list_dao import dao_add_and_commit_guest_list_contacts
-from app.service.send_notification import send_one_off_notification
+from app.dao.service_guest_list_dao import (
+    dao_add_and_commit_guest_list_contacts,
+)
 from app.models import (
     EMAIL_TYPE,
     KEY_TYPE_NORMAL,
@@ -19,14 +19,15 @@ from app.models import (
     Notification,
     ServiceGuestList,
 )
-
+from app.service.send_notification import send_one_off_notification
+from app.v2.errors import BadRequestError, TooManyRequestsError
 from tests.app.db import (
-    create_user,
-    create_reply_to_email,
     create_letter_contact,
-    create_service_sms_sender,
+    create_reply_to_email,
     create_service,
-    create_template
+    create_service_sms_sender,
+    create_template,
+    create_user,
 )
 
 
@@ -99,7 +100,8 @@ def test_send_one_off_notification_calls_persist_correctly_for_sms(
         created_by_id=str(service.created_by_id),
         reply_to_text='testing',
         reference=None,
-        postage=None
+        postage=None,
+        client_reference=None
     )
 
 
@@ -160,7 +162,8 @@ def test_send_one_off_notification_calls_persist_correctly_for_email(
         created_by_id=str(service.created_by_id),
         reply_to_text=None,
         reference=None,
-        postage=None
+        postage=None,
+        client_reference=None
     )
 
 
@@ -209,7 +212,8 @@ def test_send_one_off_notification_calls_persist_correctly_for_letter(
         created_by_id=str(service.created_by_id),
         reply_to_text=None,
         reference='this-is-random-in-real-life',
-        postage='first'
+        postage='first',
+        client_reference=None
     )
 
 

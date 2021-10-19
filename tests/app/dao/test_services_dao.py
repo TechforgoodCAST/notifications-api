@@ -8,50 +8,87 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
-from app.dao.inbound_numbers_dao import (dao_get_available_inbound_numbers,
-                                         dao_set_inbound_number_active_flag,
-                                         dao_set_inbound_number_to_service)
+from app.dao.inbound_numbers_dao import (
+    dao_get_available_inbound_numbers,
+    dao_set_inbound_number_active_flag,
+    dao_set_inbound_number_to_service,
+)
 from app.dao.organisation_dao import dao_add_service_to_organisation
-from app.dao.service_permissions_dao import (dao_add_service_permission,
-                                             dao_remove_service_permission)
-from app.dao.service_user_dao import (dao_get_service_user,
-                                      dao_update_service_user)
-from app.dao.services_dao import (dao_add_user_to_service, dao_create_service,
-                                  dao_fetch_active_users_for_service,
-                                  dao_fetch_all_services,
-                                  dao_fetch_all_services_by_user,
-                                  dao_fetch_live_services_data,
-                                  dao_fetch_service_by_id,
-                                  dao_fetch_service_by_inbound_number,
-                                  dao_fetch_stats_for_service,
-                                  dao_fetch_todays_stats_for_all_services,
-                                  dao_fetch_todays_stats_for_service,
-                                  dao_find_services_sending_to_tv_numbers,
-                                  dao_find_services_with_high_failure_rates,
-                                  dao_remove_user_from_service,
-                                  dao_resume_service, dao_suspend_service,
-                                  dao_update_service,
-                                  delete_service_and_all_associated_db_objects,
-                                  fetch_todays_total_message_count,
-                                  get_services_by_partial_name)
+from app.dao.service_permissions_dao import (
+    dao_add_service_permission,
+    dao_remove_service_permission,
+)
+from app.dao.service_user_dao import (
+    dao_get_service_user,
+    dao_update_service_user,
+)
+from app.dao.services_dao import (
+    dao_add_user_to_service,
+    dao_create_service,
+    dao_fetch_active_users_for_service,
+    dao_fetch_all_services,
+    dao_fetch_all_services_by_user,
+    dao_fetch_live_services_data,
+    dao_fetch_service_by_id,
+    dao_fetch_service_by_inbound_number,
+    dao_fetch_stats_for_service,
+    dao_fetch_todays_stats_for_all_services,
+    dao_fetch_todays_stats_for_service,
+    dao_find_services_sending_to_tv_numbers,
+    dao_find_services_with_high_failure_rates,
+    dao_remove_user_from_service,
+    dao_resume_service,
+    dao_suspend_service,
+    dao_update_service,
+    delete_service_and_all_associated_db_objects,
+    get_live_services_with_organisation,
+    get_services_by_partial_name,
+)
 from app.dao.users_dao import create_user_code, save_model_user
-from app.models import (EMAIL_TYPE, INTERNATIONAL_SMS_TYPE, KEY_TYPE_NORMAL,
-                        KEY_TYPE_TEAM, KEY_TYPE_TEST, LETTER_TYPE, SMS_TYPE,
-                        UPLOAD_LETTERS,
-                        ApiKey, InvitedUser, Job, Notification,
-                        NotificationHistory, Organisation, Permission, Service,
-                        ServicePermission, ServiceUser, Template,
-                        TemplateHistory, User, VerifyCode,
-                        user_folder_permissions, INTERNATIONAL_LETTERS)
-from tests.app.db import (create_annual_billing, create_api_key,
-                          create_email_branding, create_ft_billing,
-                          create_inbound_number, create_invited_user,
-                          create_letter_branding, create_notification,
-                          create_notification_history, create_organisation,
-                          create_service,
-                          create_service_with_defined_sms_sender,
-                          create_service_with_inbound_number, create_template,
-                          create_template_folder, create_user)
+from app.models import (
+    EMAIL_TYPE,
+    INTERNATIONAL_LETTERS,
+    INTERNATIONAL_SMS_TYPE,
+    KEY_TYPE_NORMAL,
+    KEY_TYPE_TEAM,
+    KEY_TYPE_TEST,
+    LETTER_TYPE,
+    SMS_TYPE,
+    UPLOAD_LETTERS,
+    ApiKey,
+    InvitedUser,
+    Job,
+    Notification,
+    NotificationHistory,
+    Organisation,
+    Permission,
+    Service,
+    ServicePermission,
+    ServiceUser,
+    Template,
+    TemplateHistory,
+    User,
+    VerifyCode,
+    user_folder_permissions,
+)
+from tests.app.db import (
+    create_annual_billing,
+    create_api_key,
+    create_email_branding,
+    create_ft_billing,
+    create_inbound_number,
+    create_invited_user,
+    create_letter_branding,
+    create_notification,
+    create_notification_history,
+    create_organisation,
+    create_service,
+    create_service_with_defined_sms_sender,
+    create_service_with_inbound_number,
+    create_template,
+    create_template_folder,
+    create_user,
+)
 
 
 def test_create_service(notify_db_session):
@@ -471,7 +508,7 @@ def test_dao_fetch_live_services_data(sample_user):
 def test_get_service_by_id_returns_none_if_no_service(notify_db):
     with pytest.raises(NoResultFound) as e:
         dao_fetch_service_by_id(str(uuid.uuid4()))
-    assert 'No row was found for one()' in str(e.value)
+    assert 'No row was found when one was required' in str(e.value)
 
 
 def test_get_service_by_id_returns_service(notify_db_session):
@@ -836,6 +873,93 @@ def test_fetch_stats_for_today_only_includes_today(notify_db_session):
     assert stats['created'] == 1
 
 
+def test_fetch_stats_for_today_only_includes_today_when_clocks_spring_forward(notify_db_session):
+    template = create_template(service=create_service())
+    with freeze_time('2021-03-27T23:59:59'):
+        # just before midnight yesterday in UTC -- not included
+        create_notification(template=template, to_field='1', status='permanent-failure')
+    with freeze_time('2021-03-28T00:01:00'):
+        # just after midnight yesterday in UTC -- included
+        create_notification(template=template, to_field='2', status='failed')
+    with freeze_time('2021-03-28T12:00:00'):
+        # we have entered BST at this point but had not for the previous two notifications --included
+        # collect stats for this timestamp
+        create_notification(template=template, to_field='3', status='created')
+        stats = dao_fetch_todays_stats_for_service(template.service_id)
+
+    stats = {row.status: row.count for row in stats}
+    assert 'delivered' not in stats
+    assert stats['failed'] == 1
+    assert stats['created'] == 1
+    assert not stats.get('permanent-failure')
+    assert not stats.get('temporary-failure')
+
+
+def test_fetch_stats_for_today_only_includes_today_during_bst(notify_db_session):
+    template = create_template(service=create_service())
+    with freeze_time('2021-03-28T22:59:59'):
+        # just before midnight BST -- not included
+        create_notification(template=template, to_field='1', status='permanent-failure')
+    with freeze_time('2021-03-28T23:00:01'):
+        # just after midnight BST -- included
+        create_notification(template=template, to_field='2', status='failed')
+    with freeze_time('2021-03-29T12:00:00'):
+        # well after midnight BST -- included
+        # collect stats for this timestamp
+        create_notification(template=template, to_field='3', status='created')
+        stats = dao_fetch_todays_stats_for_service(template.service_id)
+
+    stats = {row.status: row.count for row in stats}
+    assert 'delivered' not in stats
+    assert stats['failed'] == 1
+    assert stats['created'] == 1
+    assert not stats.get('permanent-failure')
+
+
+def test_fetch_stats_for_today_only_includes_today_when_clocks_fall_back(notify_db_session):
+    template = create_template(service=create_service())
+    with freeze_time('2021-10-30T22:59:59'):
+        # just before midnight BST -- not included
+        create_notification(template=template, to_field='1', status='permanent-failure')
+    with freeze_time('2021-10-31T23:00:01'):
+        # just after midnight BST -- included
+        create_notification(template=template, to_field='2', status='failed')
+    # clocks go back to UTC on 31 October at 2am
+    with freeze_time('2021-10-31T12:00:00'):
+        # well after midnight -- included
+        # collect stats for this timestamp
+        create_notification(template=template, to_field='3', status='created')
+        stats = dao_fetch_todays_stats_for_service(template.service_id)
+
+    stats = {row.status: row.count for row in stats}
+    assert 'delivered' not in stats
+    assert stats['failed'] == 1
+    assert stats['created'] == 1
+    assert not stats.get('permanent-failure')
+
+
+def test_fetch_stats_for_today_only_includes_during_utc(notify_db_session):
+    template = create_template(service=create_service())
+    with freeze_time('2021-10-30T12:59:59'):
+        # just before midnight UTC -- not included
+        create_notification(template=template, to_field='1', status='permanent-failure')
+    with freeze_time('2021-10-31T00:00:01'):
+        # just after midnight UTC -- included
+        create_notification(template=template, to_field='2', status='failed')
+    # clocks go back to UTC on 31 October at 2am
+    with freeze_time('2021-10-31T12:00:00'):
+        # well after midnight -- included
+        # collect stats for this timestamp
+        create_notification(template=template, to_field='3', status='created')
+        stats = dao_fetch_todays_stats_for_service(template.service_id)
+
+    stats = {row.status: row.count for row in stats}
+    assert 'delivered' not in stats
+    assert stats['failed'] == 1
+    assert stats['created'] == 1
+    assert not stats.get('permanent-failure')
+
+
 @pytest.mark.parametrize('created_at, limit_days, rows_returned', [
     ('Sunday 8th July 2018 12:00', 7, 0),
     ('Sunday 8th July 2018 22:59', 7, 0),
@@ -857,16 +981,6 @@ def test_fetch_stats_should_not_gather_notifications_older_than_7_days(
         stats = dao_fetch_stats_for_service(sample_template.service_id, limit_days)
 
     assert len(stats) == rows_returned
-
-
-def test_dao_fetch_todays_total_message_count_returns_count_for_today(notify_db_session):
-    notification = create_notification(template=create_template(service=create_service()))
-    assert fetch_todays_total_message_count(notification.service.id) == 1
-
-
-def test_dao_fetch_todays_total_message_count_returns_0_when_no_messages_for_today(notify_db,
-                                                                                   notify_db_session):
-    assert fetch_todays_total_message_count(uuid.uuid4()) == 0
 
 
 def test_dao_fetch_todays_stats_for_all_services_includes_all_services(notify_db_session):
@@ -1155,3 +1269,26 @@ def test_dao_find_services_with_high_failure_rates(notify_db_session, fake_uuid)
     assert len(result) == 1
     assert str(result[0].service_id) == fake_uuid
     assert result[0].permanent_failure_rate == 0.25
+
+
+def test_get_live_services_with_organisation(sample_organisation):
+    trial_service = create_service(service_name='trial service', restricted=True)
+    live_service = create_service(service_name="count as live")
+    live_service_diff_org = create_service(service_name="live service different org")
+    dont_count_as_live = create_service(service_name="dont count as live", count_as_live=False)
+    inactive_service = create_service(service_name="inactive", active=False)
+    service_without_org = create_service(service_name="no org")
+    another_org = create_organisation(name='different org', )
+
+    dao_add_service_to_organisation(trial_service, sample_organisation.id)
+    dao_add_service_to_organisation(live_service, sample_organisation.id)
+    dao_add_service_to_organisation(dont_count_as_live, sample_organisation.id)
+    dao_add_service_to_organisation(inactive_service, sample_organisation.id)
+    dao_add_service_to_organisation(live_service_diff_org, another_org.id)
+
+    services = get_live_services_with_organisation()
+    assert len(services) == 3
+    assert ([(x.service_name, x.organisation_name) for x in services]) == [
+        (live_service_diff_org.name, another_org.name),
+        (live_service.name, sample_organisation.name),
+        (service_without_org.name, None)]

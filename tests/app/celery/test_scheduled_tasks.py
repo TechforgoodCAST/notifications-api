@@ -1,43 +1,39 @@
-import uuid
+from collections import namedtuple
 from datetime import datetime, timedelta
+from unittest import mock
 from unittest.mock import call
 
 import pytest
-from collections import namedtuple
 from freezegun import freeze_time
-from mock import mock
 
 from app.celery import scheduled_tasks
 from app.celery.scheduled_tasks import (
+    check_for_missing_rows_in_completed_jobs,
+    check_for_services_with_high_failure_rates_or_sending_to_tv_numbers,
+    check_if_letters_still_in_created,
+    check_if_letters_still_pending_virus_check,
     check_job_status,
     delete_invitations,
     delete_verify_codes,
-    run_scheduled_jobs,
     replay_created_notifications,
-    check_if_letters_still_pending_virus_check,
-    check_if_letters_still_in_created,
-    check_for_missing_rows_in_completed_jobs,
-    check_for_services_with_high_failure_rates_or_sending_to_tv_numbers,
+    run_scheduled_jobs,
     switch_current_sms_provider_on_slow_delivery,
     trigger_link_tests,
 )
-from app.config import QueueNames, Config
+from app.config import Config, QueueNames
 from app.dao.jobs_dao import dao_get_job_by_id
 from app.dao.provider_details_dao import get_provider_details_by_identifier
 from app.models import (
-    JOB_STATUS_IN_PROGRESS,
     JOB_STATUS_ERROR,
     JOB_STATUS_FINISHED,
+    JOB_STATUS_IN_PROGRESS,
+    JOB_STATUS_PENDING,
     NOTIFICATION_DELIVERED,
     NOTIFICATION_PENDING_VIRUS_CHECK,
 )
-from tests.conftest import set_config
 from tests.app import load_example_csv
-from tests.app.db import (
-    create_notification,
-    create_template,
-    create_job,
-)
+from tests.app.db import create_job, create_notification, create_template
+from tests.conftest import set_config
 
 
 def _create_slow_delivery_notification(template, provider='mmg'):
@@ -174,6 +170,39 @@ def test_check_job_status_task_calls_process_incomplete_jobs_when_scheduled_job_
     )
 
 
+def test_check_job_status_task_calls_process_incomplete_jobs_for_pending_scheduled_jobs(
+    mocker, sample_template
+):
+    mock_celery = mocker.patch('app.celery.tasks.process_incomplete_jobs.apply_async')
+    job = create_job(template=sample_template, notification_count=3,
+                     created_at=datetime.utcnow() - timedelta(hours=2),
+                     scheduled_for=datetime.utcnow() - timedelta(minutes=31),
+                     job_status=JOB_STATUS_PENDING)
+
+    check_job_status()
+
+    mock_celery.assert_called_once_with(
+        [[str(job.id)]],
+        queue=QueueNames.JOBS
+    )
+
+
+def test_check_job_status_task_does_not_call_process_incomplete_jobs_for_non_scheduled_pending_jobs(
+    mocker,
+    sample_template,
+):
+    mock_celery = mocker.patch('app.celery.tasks.process_incomplete_jobs.apply_async')
+    create_job(
+        template=sample_template,
+        notification_count=3,
+        created_at=datetime.utcnow() - timedelta(hours=2),
+        job_status=JOB_STATUS_PENDING
+    )
+    check_job_status()
+
+    assert not mock_celery.called
+
+
 def test_check_job_status_task_calls_process_incomplete_jobs_for_multiple_jobs(mocker, sample_template):
     mock_celery = mocker.patch('app.celery.tasks.process_incomplete_jobs.apply_async')
     job = create_job(template=sample_template, notification_count=3,
@@ -211,9 +240,16 @@ def test_check_job_status_task_only_sends_old_tasks(mocker, sample_template):
         processing_started=datetime.utcnow() - timedelta(minutes=29),
         job_status=JOB_STATUS_IN_PROGRESS
     )
+    create_job(
+        template=sample_template,
+        notification_count=3,
+        created_at=datetime.utcnow() - timedelta(minutes=50),
+        scheduled_for=datetime.utcnow() - timedelta(minutes=29),
+        job_status=JOB_STATUS_PENDING
+    )
     check_job_status()
 
-    # job 2 not in celery task
+    # jobs 2 and 3 were created less than 30 minutes ago, so are not sent to Celery task
     mock_celery.assert_called_once_with(
         [[str(job.id)]],
         queue=QueueNames.JOBS
@@ -561,39 +597,6 @@ def test_check_for_services_with_high_failure_rates_or_sending_to_tv_numbers(
         subject="[test] High failure rates for sms spotted for services",
         ticket_type='incident'
     )
-
-
-def test_send_canary_to_cbc_proxy_invokes_cbc_proxy_client(
-    mocker,
-    notify_api
-):
-    mock_send_canary = mocker.patch(
-        'app.clients.cbc_proxy.CBCProxyCanary.send_canary',
-    )
-
-    scheduled_tasks.send_canary_to_cbc_proxy()
-
-    assert mock_send_canary.called is True
-    # the 0th argument of the call to send_canary
-    identifier = mock_send_canary.mock_calls[0][1][0]
-
-    try:
-        uuid.UUID(identifier)
-    except BaseException:
-        pytest.fail(f"{identifier} is not a valid uuid")
-
-
-def test_send_canary_to_cbc_proxy_does_nothing_if_cbc_proxy_disabled(
-    mocker, notify_api
-):
-    mock_send_canary = mocker.patch(
-        'app.clients.cbc_proxy.CBCProxyCanary.send_canary',
-    )
-
-    with set_config(notify_api, 'CBC_PROXY_ENABLED', False):
-        scheduled_tasks.send_canary_to_cbc_proxy()
-
-    assert mock_send_canary.called is False
 
 
 def test_trigger_link_tests_calls_for_all_providers(

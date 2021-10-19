@@ -1,48 +1,38 @@
 import json
+from collections import defaultdict, namedtuple
 from datetime import datetime
-from collections import namedtuple, defaultdict
 
 from flask import current_app
 from notifications_utils.columns import Columns
 from notifications_utils.postal_address import PostalAddress
 from notifications_utils.recipients import RecipientCSV
-from notifications_utils.statsd_decorators import statsd
 from notifications_utils.timezones import convert_utc_to_bst
-from requests import (
-    HTTPError,
-    request,
-    RequestException
-)
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from requests import HTTPError, RequestException, request
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from app import (
-    create_uuid,
-    create_random_identifier,
-    encryption,
-    notify_celery,
-)
+from app import create_random_identifier, create_uuid, encryption, notify_celery
 from app.aws import s3
-from app.celery import provider_tasks, letters_pdf_tasks, research_mode_tasks
+from app.celery import letters_pdf_tasks, provider_tasks, research_mode_tasks
 from app.config import QueueNames
-from app.dao.daily_sorted_letter_dao import dao_create_or_update_daily_sorted_letter
+from app.dao.daily_sorted_letter_dao import (
+    dao_create_or_update_daily_sorted_letter,
+)
 from app.dao.inbound_sms_dao import dao_get_inbound_sms_by_id
-from app.dao.jobs_dao import (
-    dao_update_job,
-    dao_get_job_by_id,
-)
+from app.dao.jobs_dao import dao_get_job_by_id, dao_update_job
 from app.dao.notifications_dao import (
-    get_notification_by_id,
-    dao_update_notifications_by_reference,
     dao_get_last_notification_added_for_job_id,
-    update_notification_status_by_reference,
     dao_get_notification_or_history_by_reference,
+    dao_update_notifications_by_reference,
+    get_notification_by_id,
+    update_notification_status_by_reference,
 )
-from app.dao.provider_details_dao import get_provider_details_by_notification_type
+from app.dao.provider_details_dao import (
+    get_provider_details_by_notification_type,
+)
 from app.dao.returned_letters_dao import insert_or_update_returned_letters
 from app.dao.service_email_reply_to_dao import dao_get_reply_to_by_id
 from app.dao.service_inbound_api_dao import get_service_inbound_api_for_service
 from app.dao.service_sms_sender_dao import dao_get_service_sms_senders_by_id
-from app.dao.services_dao import fetch_todays_total_message_count
 from app.dao.templates_dao import dao_get_template_by_id
 from app.exceptions import DVLAException, NotificationTechnicalFailureException
 from app.models import (
@@ -56,21 +46,22 @@ from app.models import (
     LETTER_TYPE,
     NOTIFICATION_CREATED,
     NOTIFICATION_DELIVERED,
-    NOTIFICATION_SENDING,
-    NOTIFICATION_TEMPORARY_FAILURE,
-    NOTIFICATION_TECHNICAL_FAILURE,
     NOTIFICATION_RETURNED_LETTER,
+    NOTIFICATION_SENDING,
+    NOTIFICATION_TECHNICAL_FAILURE,
+    NOTIFICATION_TEMPORARY_FAILURE,
     SMS_TYPE,
     DailySortedLetter,
 )
 from app.notifications.process_notifications import persist_notification
-from app.service.utils import service_allowed_to_send_to
+from app.notifications.validators import check_service_over_daily_message_limit
 from app.serialised_models import SerialisedService, SerialisedTemplate
-from app.utils import DATETIME_FORMAT
+from app.service.utils import service_allowed_to_send_to
+from app.utils import DATETIME_FORMAT, get_reference_from_personalisation
+from app.v2.errors import TooManyRequestsError
 
 
 @notify_celery.task(name="process-job")
-@statsd(namespace="tasks")
 def process_job(job_id, sender_id=None):
     start = datetime.utcnow()
     job = dao_get_job_by_id(job_id)
@@ -81,6 +72,10 @@ def process_job(job_id, sender_id=None):
 
     service = job.service
 
+    job.job_status = JOB_STATUS_IN_PROGRESS
+    job.processing_started = start
+    dao_update_job(job)
+
     if not service.active:
         job.job_status = JOB_STATUS_CANCELLED
         dao_update_job(job)
@@ -90,10 +85,6 @@ def process_job(job_id, sender_id=None):
 
     if __sending_limits_for_job_exceeded(service, job, job_id):
         return
-
-    job.job_status = JOB_STATUS_IN_PROGRESS
-    job.processing_started = start
-    dao_update_job(job)
 
     recipient_csv, template, sender_id = get_recipient_csv_and_template_and_sender_id(job)
 
@@ -169,9 +160,13 @@ def process_row(row, template, job, service, sender_id=None):
 
 
 def __sending_limits_for_job_exceeded(service, job, job_id):
-    total_sent = fetch_todays_total_message_count(service.id)
-
-    if total_sent + job.notification_count > service.message_limit:
+    try:
+        total_sent = check_service_over_daily_message_limit(KEY_TYPE_NORMAL, service)
+        if total_sent + job.notification_count > service.message_limit:
+            raise TooManyRequestsError(service.message_limit)
+        else:
+            return False
+    except TooManyRequestsError:
         job.job_status = 'sending limits exceeded'
         job.processing_finished = datetime.utcnow()
         dao_update_job(job)
@@ -180,11 +175,9 @@ def __sending_limits_for_job_exceeded(service, job, job_id):
                 job_id, job.notification_count, service.message_limit)
         )
         return True
-    return False
 
 
 @notify_celery.task(bind=True, name="save-sms", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def save_sms(self,
              service_id,
              notification_id,
@@ -243,7 +236,6 @@ def save_sms(self,
 
 
 @notify_celery.task(bind=True, name="save-email", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def save_email(self,
                service_id,
                notification_id,
@@ -295,14 +287,12 @@ def save_email(self,
 
 
 @notify_celery.task(bind=True, name="save-api-email", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def save_api_email(self, encrypted_notification):
 
     save_api_email_or_sms(self, encrypted_notification)
 
 
 @notify_celery.task(bind=True, name="save-api-sms", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def save_api_sms(self, encrypted_notification):
     save_api_email_or_sms(self, encrypted_notification)
 
@@ -352,7 +342,6 @@ def save_api_email_or_sms(self, encrypted_notification):
 
 
 @notify_celery.task(bind=True, name="save-letter", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def save_letter(
         self,
         service_id,
@@ -391,6 +380,7 @@ def save_letter(
             job_row_number=notification['row_number'],
             notification_id=notification_id,
             reference=create_random_identifier(),
+            client_reference=get_reference_from_personalisation(notification['personalisation']),
             reply_to_text=template.reply_to_text,
             status=status
         )
@@ -414,7 +404,6 @@ def save_letter(
 
 
 @notify_celery.task(bind=True, name='update-letter-notifications-to-sent')
-@statsd(namespace="tasks")
 def update_letter_notifications_to_sent_to_dvla(self, notification_references):
     # This task will be called by the FTP app to update notifications as sent to DVLA
     provider = get_provider_details_by_notification_type(LETTER_TYPE)[0]
@@ -433,7 +422,6 @@ def update_letter_notifications_to_sent_to_dvla(self, notification_references):
 
 
 @notify_celery.task(bind=True, name='update-letter-notifications-to-error')
-@statsd(namespace="tasks")
 def update_letter_notifications_to_error(self, notification_references):
     # This task will be called by the FTP app to update notifications as sent to DVLA
 
@@ -469,7 +457,6 @@ def handle_exception(task, notification, notification_id, exc):
 
 
 @notify_celery.task(bind=True, name='update-letter-notifications-statuses')
-@statsd(namespace="tasks")
 def update_letter_notifications_statuses(self, filename):
     notification_updates = parse_dvla_file(filename)
 
@@ -486,7 +473,6 @@ def update_letter_notifications_statuses(self, filename):
 
 
 @notify_celery.task(bind=True, name="record-daily-sorted-counts")
-@statsd(namespace="tasks")
 def record_daily_sorted_counts(self, filename):
     sorted_letter_counts = defaultdict(int)
     notification_updates = parse_dvla_file(filename)
@@ -573,7 +559,6 @@ def check_billable_units(notification_update):
 
 
 @notify_celery.task(bind=True, name="send-inbound-sms", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def send_inbound_sms_to_service(self, inbound_sms_id, service_id):
     inbound_api = get_service_inbound_api_for_service(service_id=service_id)
     if not inbound_api:
@@ -628,7 +613,6 @@ def send_inbound_sms_to_service(self, inbound_sms_id, service_id):
 
 
 @notify_celery.task(name='process-incomplete-jobs')
-@statsd(namespace="tasks")
 def process_incomplete_jobs(job_ids):
     jobs = [dao_get_job_by_id(job_id) for job_id in job_ids]
 
@@ -665,7 +649,6 @@ def process_incomplete_job(job_id):
 
 
 @notify_celery.task(name='process-returned-letters-list')
-@statsd(namespace="tasks")
 def process_returned_letters_list(notification_references):
     updated, updated_history = dao_update_notifications_by_reference(
         notification_references,

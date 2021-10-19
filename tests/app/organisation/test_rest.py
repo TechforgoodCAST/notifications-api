@@ -1,23 +1,25 @@
-from datetime import datetime
-
 import uuid
+from datetime import datetime
 
 import pytest
 from freezegun import freeze_time
 
+from app.dao.organisation_dao import (
+    dao_add_service_to_organisation,
+    dao_add_user_to_organisation,
+)
 from app.dao.services_dao import dao_archive_service
 from app.models import Organisation
-from app.dao.organisation_dao import dao_add_service_to_organisation, dao_add_user_to_organisation
 from tests.app.db import (
+    create_annual_billing,
     create_domain,
     create_email_branding,
+    create_ft_billing,
     create_letter_branding,
     create_organisation,
     create_service,
-    create_user,
     create_template,
-    create_ft_billing,
-    create_annual_billing
+    create_user,
 )
 
 
@@ -443,7 +445,6 @@ def test_post_update_organisation_set_mou_doesnt_email_if_no_signed_by(
         None,
         None,
         {
-            'MOU_NOTIFY_TEAM_ALERT_TEMPLATE_ID': 'notify-support+test@digital.cabinet-office.gov.uk',
             'MOU_SIGNER_RECEIPT_TEMPLATE_ID': 'notify@digital.cabinet-office.gov.uk',
         }
     ),
@@ -451,7 +452,6 @@ def test_post_update_organisation_set_mou_doesnt_email_if_no_signed_by(
         'Important Person',
         'important@person.com',
         {
-            'MOU_NOTIFY_TEAM_ALERT_TEMPLATE_ID': 'notify-support+test@digital.cabinet-office.gov.uk',
             'MOU_SIGNED_ON_BEHALF_ON_BEHALF_RECEIPT_TEMPLATE_ID': 'important@person.com',
             'MOU_SIGNED_ON_BEHALF_SIGNER_RECEIPT_TEMPLATE_ID': 'notify@digital.cabinet-office.gov.uk',
         }

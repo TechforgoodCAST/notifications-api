@@ -1,18 +1,14 @@
-from flask import (
-    Blueprint,
-    jsonify,
-    request,
-    current_app
-)
+from flask import Blueprint, current_app, jsonify, request
 
 from app.config import QueueNames
-from app.errors import register_errors
 from app.dao.templates_dao import dao_get_template_by_id
-from app.notifications.process_notifications import persist_notification, send_notification_to_queue
-from app.models import (KEY_TYPE_NORMAL, EMAIL_TYPE)
-from app.utils import (
-    get_or_build_support_email_address
+from app.errors import register_errors
+from app.models import EMAIL_TYPE, KEY_TYPE_NORMAL
+from app.notifications.process_notifications import (
+    persist_notification,
+    send_notification_to_queue,
 )
+from app.utils import get_or_build_support_email_address
 
 feedbacks_blueprint = Blueprint('feedbacks', __name__, url_prefix='/feedbacks')
 register_errors(feedbacks_blueprint)

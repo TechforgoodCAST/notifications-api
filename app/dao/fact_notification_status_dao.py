@@ -1,36 +1,36 @@
-from datetime import datetime, timedelta, time
+from datetime import datetime, time, timedelta
 
 from flask import current_app
 from notifications_utils.timezones import convert_bst_to_utc
-from sqlalchemy import case, func, Date
+from sqlalchemy import Date, case, func
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.sql.expression import literal, extract
+from sqlalchemy.sql.expression import extract, literal
 from sqlalchemy.types import DateTime, Integer
 
 from app import db
+from app.dao.dao_utils import autocommit
 from app.models import (
-    FactNotificationStatus,
     KEY_TYPE_TEST,
-    Notification,
     NOTIFICATION_CANCELLED,
     NOTIFICATION_CREATED,
     NOTIFICATION_DELIVERED,
     NOTIFICATION_FAILED,
     NOTIFICATION_PENDING,
+    NOTIFICATION_PERMANENT_FAILURE,
     NOTIFICATION_SENDING,
     NOTIFICATION_SENT,
     NOTIFICATION_TECHNICAL_FAILURE,
     NOTIFICATION_TEMPORARY_FAILURE,
-    NOTIFICATION_PERMANENT_FAILURE,
+    FactNotificationStatus,
+    Notification,
     Service,
     Template,
 )
-from app.dao.dao_utils import transactional
 from app.utils import (
     get_london_midnight_in_utc,
-    midnight_n_days_ago,
     get_london_month_from_utc_column,
     get_notification_table_to_use,
+    midnight_n_days_ago,
 )
 
 
@@ -83,7 +83,7 @@ def query_for_fact_status_data(table, start_date, end_date, notification_type, s
     return query.all()
 
 
-@transactional
+@autocommit
 def update_fact_notification_status(data, process_day, notification_type):
     table = FactNotificationStatus.__table__
     FactNotificationStatus.query.filter(
@@ -430,16 +430,37 @@ def fetch_monthly_template_usage_for_service(start_date, end_date, service_id):
     return query.all()
 
 
-def get_total_sent_notifications_for_day_and_type(day, notification_type):
-    result = db.session.query(
-        func.sum(FactNotificationStatus.notification_count).label('count')
+def get_total_notifications_for_date_range(start_date, end_date):
+    query = db.session.query(
+        FactNotificationStatus.bst_date.cast(db.Text).label("bst_date"),
+        func.sum(case(
+            [
+                (FactNotificationStatus.notification_type == 'email', FactNotificationStatus.notification_count)
+            ],
+            else_=0)).label('emails'),
+        func.sum(case(
+            [
+                (FactNotificationStatus.notification_type == 'sms', FactNotificationStatus.notification_count)
+            ],
+            else_=0)).label('sms'),
+        func.sum(case(
+            [
+                (FactNotificationStatus.notification_type == 'letter', FactNotificationStatus.notification_count)
+            ],
+            else_=0)).label('letters'),
     ).filter(
-        FactNotificationStatus.notification_type == notification_type,
         FactNotificationStatus.key_type != KEY_TYPE_TEST,
-        FactNotificationStatus.bst_date == day,
-    ).scalar()
-
-    return result or 0
+    ).group_by(
+        FactNotificationStatus.bst_date
+    ).order_by(
+        FactNotificationStatus.bst_date
+    )
+    if start_date and end_date:
+        query = query.filter(
+            FactNotificationStatus.bst_date >= start_date,
+            FactNotificationStatus.bst_date <= end_date
+        )
+    return query.all()
 
 
 def fetch_monthly_notification_statuses_per_service(start_date, end_date):

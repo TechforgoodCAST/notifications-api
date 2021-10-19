@@ -1,26 +1,22 @@
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 from flask import current_app
 from sqlalchemy import asc, desc
 
 from app import db
+from app.dao.dao_utils import VersionOptions, autocommit, version_class
+from app.dao.users_dao import get_user_by_id
 from app.models import (
     LETTER_TYPE,
     SECOND_CLASS,
     Template,
     TemplateHistory,
-    TemplateRedacted
+    TemplateRedacted,
 )
-from app.dao.dao_utils import (
-    transactional,
-    version_class,
-    VersionOptions,
-)
-from app.dao.users_dao import get_user_by_id
 
 
-@transactional
+@autocommit
 @version_class(
     VersionOptions(Template, history_class=TemplateHistory)
 )
@@ -42,18 +38,15 @@ def dao_create_template(template):
     db.session.add(template)
 
 
-@transactional
+@autocommit
 @version_class(
     VersionOptions(Template, history_class=TemplateHistory)
 )
 def dao_update_template(template):
-    if template.archived:
-        template.folder = None
-
     db.session.add(template)
 
 
-@transactional
+@autocommit
 def dao_update_template_reply_to(template_id, reply_to):
     Template.query.filter_by(id=template_id).update(
         {"service_letter_contact_id": reply_to,
@@ -85,7 +78,7 @@ def dao_update_template_reply_to(template_id, reply_to):
     return template
 
 
-@transactional
+@autocommit
 def dao_redact_template(template, user_id):
     template.template_redacted.redact_personalisation = True
     template.template_redacted.updated_at = datetime.utcnow()

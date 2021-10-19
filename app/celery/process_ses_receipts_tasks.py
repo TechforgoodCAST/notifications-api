@@ -3,25 +3,22 @@ from datetime import datetime, timedelta
 import iso8601
 from celery.exceptions import Retry
 from flask import current_app, json
-from notifications_utils.statsd_decorators import statsd
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import notify_celery, statsd_client
-from app.config import QueueNames
 from app.clients.email.aws_ses import get_aws_responses
+from app.config import QueueNames
 from app.dao import notifications_dao
-from app.models import NOTIFICATION_SENDING, NOTIFICATION_PENDING
-
+from app.models import NOTIFICATION_PENDING, NOTIFICATION_SENDING
 from app.notifications.notifications_ses_callback import (
+    _check_and_queue_callback_task,
+    _check_and_queue_complaint_callback_task,
     determine_notification_bounce_type,
     handle_complaint,
-    _check_and_queue_complaint_callback_task,
-    _check_and_queue_callback_task,
 )
 
 
 @notify_celery.task(bind=True, name="process-ses-result", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def process_ses_results(self, response):
     try:
         ses_message = json.loads(response['Message'])

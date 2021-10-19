@@ -5,68 +5,68 @@ from unittest.mock import Mock, call
 
 import pytest
 import requests_mock
-from freezegun import freeze_time
-from requests import RequestException
-from sqlalchemy.exc import SQLAlchemyError
 from celery.exceptions import Retry
+from freezegun import freeze_time
+from notifications_utils.columns import Row
 from notifications_utils.template import (
     LetterPrintTemplate,
     PlainTextEmailTemplate,
     SMSMessageTemplate,
 )
-from notifications_utils.columns import Row
+from requests import RequestException
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import encryption
-from app.celery import provider_tasks
-from app.celery import tasks
+from app.celery import provider_tasks, tasks
 from app.celery.tasks import (
-    process_job,
-    process_row,
-    save_sms,
-    save_email,
-    save_letter,
+    get_recipient_csv_and_template_and_sender_id,
     process_incomplete_job,
     process_incomplete_jobs,
-    s3,
-    send_inbound_sms_to_service,
+    process_job,
     process_returned_letters_list,
-    get_recipient_csv_and_template_and_sender_id,
+    process_row,
+    s3,
     save_api_email,
-    save_api_sms
+    save_api_sms,
+    save_email,
+    save_letter,
+    save_sms,
+    send_inbound_sms_to_service,
 )
 from app.config import QueueNames
 from app.dao import jobs_dao, service_email_reply_to_dao, service_sms_sender_dao
 from app.models import (
+    EMAIL_TYPE,
+    JOB_STATUS_ERROR,
+    JOB_STATUS_FINISHED,
+    JOB_STATUS_IN_PROGRESS,
+    KEY_TYPE_NORMAL,
+    LETTER_TYPE,
+    NOTIFICATION_CREATED,
+    SMS_TYPE,
     Job,
     Notification,
     NotificationHistory,
-    EMAIL_TYPE,
-    KEY_TYPE_NORMAL,
-    JOB_STATUS_FINISHED,
-    JOB_STATUS_ERROR,
-    JOB_STATUS_IN_PROGRESS,
-    LETTER_TYPE,
-    SMS_TYPE,
     ReturnedLetter,
-    NOTIFICATION_CREATED)
+)
 from app.serialised_models import SerialisedService, SerialisedTemplate
 from app.utils import DATETIME_FORMAT
-
+from app.v2.errors import TooManyRequestsError
 from tests.app import load_example_csv
-
 from tests.app.db import (
+    create_api_key,
     create_inbound_sms,
     create_job,
     create_letter_contact,
     create_notification,
-    create_service_inbound_api,
+    create_notification_history,
+    create_reply_to_email,
     create_service,
+    create_service_inbound_api,
+    create_service_with_defined_sms_sender,
     create_template,
     create_user,
-    create_reply_to_email,
-    create_service_with_defined_sms_sender,
-    create_notification_history,
-    create_api_key)
+)
 from tests.conftest import set_config_values
 
 
@@ -151,65 +151,6 @@ def test_should_process_sms_job_with_sender_id(sample_job, mocker, fake_uuid):
     )
 
 
-@freeze_time("2016-01-01 11:09:00.061258")
-def test_should_not_process_sms_job_if_would_exceed_send_limits(
-    notify_db_session, mocker
-):
-    service = create_service(message_limit=9)
-    template = create_template(service=service)
-    job = create_job(template=template, notification_count=10, original_file_name='multiple_sms.csv')
-    mocker.patch('app.celery.tasks.s3.get_job_and_metadata_from_s3',
-                 return_value=(load_example_csv('multiple_sms'), {'sender_id': None}))
-    mocker.patch('app.celery.tasks.process_row')
-
-    process_job(job.id)
-
-    job = jobs_dao.dao_get_job_by_id(job.id)
-    assert job.job_status == 'sending limits exceeded'
-    assert s3.get_job_and_metadata_from_s3.called is False
-    assert tasks.process_row.called is False
-
-
-def test_should_not_process_sms_job_if_would_exceed_send_limits_inc_today(
-    notify_db_session, mocker
-):
-    service = create_service(message_limit=1)
-    template = create_template(service=service)
-    job = create_job(template=template)
-
-    create_notification(template=template, job=job)
-
-    mocker.patch('app.celery.tasks.s3.get_job_and_metadata_from_s3',
-                 return_value=(load_example_csv('sms'), {'sender_id': None}))
-    mocker.patch('app.celery.tasks.process_row')
-
-    process_job(job.id)
-
-    job = jobs_dao.dao_get_job_by_id(job.id)
-    assert job.job_status == 'sending limits exceeded'
-    assert s3.get_job_and_metadata_from_s3.called is False
-    assert tasks.process_row.called is False
-
-
-@pytest.mark.parametrize('template_type', ['sms', 'email'])
-def test_should_not_process_email_job_if_would_exceed_send_limits_inc_today(notify_db_session, template_type, mocker):
-    service = create_service(message_limit=1)
-    template = create_template(service=service, template_type=template_type)
-    job = create_job(template=template)
-
-    create_notification(template=template, job=job)
-
-    mocker.patch('app.celery.tasks.s3.get_job_and_metadata_from_s3')
-    mocker.patch('app.celery.tasks.process_row')
-
-    process_job(job.id)
-
-    job = jobs_dao.dao_get_job_by_id(job.id)
-    assert job.job_status == 'sending limits exceeded'
-    assert s3.get_job_and_metadata_from_s3.called is False
-    assert tasks.process_row.called is False
-
-
 def test_should_not_process_job_if_already_pending(sample_template, mocker):
     job = create_job(template=sample_template, job_status='scheduled')
 
@@ -222,8 +163,48 @@ def test_should_not_process_job_if_already_pending(sample_template, mocker):
     assert tasks.process_row.called is False
 
 
-def test_should_process_email_job_if_exactly_on_send_limits(notify_db_session,
-                                                            mocker):
+def test_should_not_process_if_send_limit_is_exceeded(
+    notify_api, notify_db_session, mocker
+):
+    service = create_service(message_limit=9)
+    template = create_template(service=service)
+    job = create_job(template=template, notification_count=10, original_file_name='multiple_sms.csv')
+
+    mocker.patch('app.celery.tasks.s3.get_job_and_metadata_from_s3',
+                 return_value=(load_example_csv('multiple_sms'), {'sender_id': None}))
+    mocker.patch('app.celery.tasks.process_row')
+    mocker.patch('app.celery.tasks.check_service_over_daily_message_limit',
+                 side_effect=TooManyRequestsError("exceeded limit"))
+    process_job(job.id)
+
+    job = jobs_dao.dao_get_job_by_id(job.id)
+    assert job.job_status == 'sending limits exceeded'
+    assert s3.get_job_and_metadata_from_s3.called is False
+    assert tasks.process_row.called is False
+
+
+def test_should_not_process_if_send_limit_is_exceeded_by_job_notification_count(
+    notify_api, notify_db_session, mocker
+):
+    service = create_service(message_limit=9)
+    template = create_template(service=service)
+    job = create_job(template=template, notification_count=10, original_file_name='multiple_sms.csv')
+    mock_s3 = mocker.patch('app.celery.tasks.s3.get_job_and_metadata_from_s3',
+                           return_value=(load_example_csv('multiple_sms'), {'sender_id': None}))
+    mock_process_row = mocker.patch('app.celery.tasks.process_row')
+    mocker.patch('app.celery.tasks.check_service_over_daily_message_limit',
+                 return_value=0)
+    process_job(job.id)
+
+    job = jobs_dao.dao_get_job_by_id(job.id)
+    assert job.job_status == 'sending limits exceeded'
+    mock_s3.assert_not_called()
+    mock_process_row.assert_not_called()
+
+
+def test_should_process_job_if_send_limits_are_not_exceeded(
+        notify_api, notify_db_session, mocker
+):
     service = create_service(message_limit=10)
     template = create_template(service=service, template_type='email')
     job = create_job(template=template, notification_count=10)
@@ -234,6 +215,7 @@ def test_should_process_email_job_if_exactly_on_send_limits(notify_db_session,
     mocker.patch('app.encryption.encrypt', return_value="something_encrypted")
     mocker.patch('app.celery.tasks.create_uuid', return_value="uuid")
 
+    mocker.patch('app.celery.tasks.check_service_over_daily_message_limit', return_value=0)
     process_job(job.id)
 
     s3.get_job_and_metadata_from_s3.assert_called_once_with(
@@ -754,7 +736,10 @@ def test_save_email_should_use_template_version_from_job_not_latest(sample_email
     notification = _notification_json(sample_email_template, 'my_email@my_email.com')
     version_on_notification = sample_email_template.version
     # Change the template
-    from app.dao.templates_dao import dao_update_template, dao_get_template_by_id
+    from app.dao.templates_dao import (
+        dao_get_template_by_id,
+        dao_update_template,
+    )
     sample_email_template.content = sample_email_template.content + " another version of the template"
     mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     dao_update_template(sample_email_template)
@@ -1066,6 +1051,38 @@ def test_save_letter_saves_letter_to_database_with_correct_postage(
     assert notification_db.id == notification_id
     assert notification_db.postage == expected_postage
     assert notification_db.international == expected_international
+
+
+@pytest.mark.parametrize('reference_paceholder,', [None, 'ref2'])
+def test_save_letter_saves_letter_to_database_with_correct_client_reference(
+    mocker, notify_db_session, reference_paceholder
+):
+    service = create_service(service_permissions=[LETTER_TYPE])
+    template = create_template(service=service, template_type=LETTER_TYPE)
+    letter_job = create_job(template=template)
+
+    personalisation = {'addressline1': 'Foo', 'addressline2': 'Bar', 'postcode': 'SW1A 1AA'}
+    if reference_paceholder:
+        personalisation['reference'] = reference_paceholder
+
+    mocker.patch('app.celery.tasks.letters_pdf_tasks.get_pdf_for_templated_letter.apply_async')
+    notification_json = _notification_json(
+        template=letter_job.template,
+        to='Foo',
+        personalisation=personalisation,
+        job_id=letter_job.id,
+        row_number=1
+    )
+    notification_id = uuid.uuid4()
+    save_letter(
+        letter_job.service_id,
+        notification_id,
+        encryption.encrypt(notification_json),
+    )
+
+    notification_db = Notification.query.one()
+    assert notification_db.id == notification_id
+    assert notification_db.client_reference == reference_paceholder
 
 
 def test_save_letter_saves_letter_to_database_with_formatted_postcode(mocker, notify_db_session):

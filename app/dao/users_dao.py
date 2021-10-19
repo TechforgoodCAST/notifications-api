@@ -1,16 +1,16 @@
-from random import (SystemRandom)
-from datetime import (datetime, timedelta)
 import uuid
+from datetime import datetime, timedelta
+from random import SystemRandom
 
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app import db
+from app.dao.dao_utils import autocommit
 from app.dao.permissions_dao import permission_dao
 from app.dao.service_user_dao import dao_get_service_users_by_user_id
-from app.dao.dao_utils import transactional
 from app.errors import InvalidRequest
-from app.models import (EMAIL_AUTH_TYPE, User, VerifyCode)
+from app.models import EMAIL_AUTH_TYPE, User, VerifyCode
 from app.utils import escape_special_characters, get_archived_db_column_value
 
 
@@ -20,7 +20,15 @@ def _remove_values_for_keys_if_present(dict, keys):
 
 
 def create_secret_code():
-    return ''.join(map(str, [SystemRandom().randrange(10) for i in range(5)]))
+    return ''.join(get_non_repeating_random_digits(5))
+
+
+def get_non_repeating_random_digits(length):
+    output = [None] * length
+    for index in range(length):
+        while output[index] in {None, output[index - 1]}:
+            output[index] = str(SystemRandom().randrange(10))
+    return output
 
 
 def save_user_attribute(usr, update_dict=None):
@@ -123,12 +131,10 @@ def reset_failed_login_count(user):
         db.session.commit()
 
 
-def update_user_password(user, password, validated_email_access=False):
+def update_user_password(user, password):
     # reset failed login count - they've just reset their password so should be fine
     user.password = password
     user.password_changed_at = datetime.utcnow()
-    if validated_email_access:
-        user.email_access_validated_at = datetime.utcnow()
     db.session.add(user)
     db.session.commit()
 
@@ -146,7 +152,7 @@ def get_user_and_accounts(user_id):
     ).one()
 
 
-@transactional
+@autocommit
 def dao_archive_user(user):
     if not user_can_be_archived(user):
         msg = "User can’t be removed from a service - check all services have another team member with manage_settings"

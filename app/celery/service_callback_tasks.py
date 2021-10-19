@@ -1,12 +1,7 @@
 import json
 
 from flask import current_app
-from notifications_utils.statsd_decorators import statsd
-from requests import (
-    HTTPError,
-    request,
-    RequestException
-)
+from requests import HTTPError, RequestException, request
 
 from app import encryption, notify_celery
 from app.config import QueueNames
@@ -14,7 +9,6 @@ from app.utils import DATETIME_FORMAT
 
 
 @notify_celery.task(bind=True, name="send-delivery-status", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def send_delivery_status_to_service(
     self, notification_id, encrypted_status_update
 ):
@@ -28,8 +22,11 @@ def send_delivery_status_to_service(
         "created_at": status_update['notification_created_at'],
         "completed_at": status_update['notification_updated_at'],
         "sent_at": status_update['notification_sent_at'],
-        "notification_type": status_update['notification_type']
+        "notification_type": status_update['notification_type'],
+        "template_id": status_update['template_id'],
+        "template_version": status_update['template_version']
     }
+
     _send_data_to_service_callback_api(
         self,
         data,
@@ -40,7 +37,6 @@ def send_delivery_status_to_service(
 
 
 @notify_celery.task(bind=True, name="send-complaint", max_retries=5, default_retry_delay=300)
-@statsd(namespace="tasks")
 def send_complaint_to_service(self, complaint_data):
     complaint = encryption.decrypt(complaint_data)
 
@@ -90,7 +86,7 @@ def _send_data_to_service_callback_api(self, data, service_callback_url, token, 
                 e
             )
         )
-        if not isinstance(e, HTTPError) or e.response.status_code >= 500:
+        if not isinstance(e, HTTPError) or e.response.status_code >= 500 or e.response.status_code == 429:
             try:
                 self.retry(queue=QueueNames.CALLBACKS_RETRY)
             except self.MaxRetriesExceededError:
@@ -125,6 +121,8 @@ def create_delivery_status_callback_data(notification, service_callback_api):
         "notification_type": notification.notification_type,
         "service_callback_api_url": service_callback_api.url,
         "service_callback_api_bearer_token": service_callback_api.bearer_token,
+        "template_id": str(notification.template_id),
+        "template_version": notification.template_version,
     }
     return encryption.encrypt(data)
 

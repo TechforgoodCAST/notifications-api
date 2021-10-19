@@ -1,20 +1,23 @@
-import uuid
 from datetime import datetime
 
 from flask import current_app
-from notifications_utils.statsd_decorators import statsd
-from sqlalchemy.schema import Sequence
 
-from app import cbc_proxy_client, db, notify_celery
-from app.clients.cbc_proxy import CBCProxyFatalException, CBCProxyRetryableException
-from app.config import QueueNames
-from app.models import BroadcastEventMessageType, BroadcastProvider, BroadcastProviderMessageStatus
-from app.dao.broadcast_message_dao import (
-    dao_get_broadcast_event_by_id,
-    create_broadcast_provider_message,
-    update_broadcast_provider_message_status
+from app import cbc_proxy_client, notify_celery
+from app.clients.cbc_proxy import (
+    CBCProxyFatalException,
+    CBCProxyRetryableException,
 )
-
+from app.config import QueueNames
+from app.dao.broadcast_message_dao import (
+    create_broadcast_provider_message,
+    dao_get_broadcast_event_by_id,
+    update_broadcast_provider_message_status,
+)
+from app.models import (
+    BroadcastEventMessageType,
+    BroadcastProvider,
+    BroadcastProviderMessageStatus,
+)
 from app.utils import format_sequential_number
 
 
@@ -52,11 +55,11 @@ def check_provider_message_should_send(broadcast_event, provider):
     """
     current_provider_message = broadcast_event.get_provider_message(provider)
     # if this is the first time a task is being executed, it won't have a provider message yet
-    if current_provider_message and current_provider_message.status == BroadcastProviderMessageStatus.TECHNICAL_FAILURE:
+    if current_provider_message and current_provider_message.status != BroadcastProviderMessageStatus.SENDING:
         raise CBCProxyFatalException(
             f'Cannot send broadcast_event {broadcast_event.id} ' +
             f'to provider {provider}: ' +
-            'It is already in status technical-failure'
+            f'It is in status {current_provider_message.status}'
         )
 
     if broadcast_event.transmitted_finishes_at < datetime.utcnow():
@@ -98,7 +101,6 @@ def check_provider_message_should_send(broadcast_event, provider):
 
 
 @notify_celery.task(name="send-broadcast-event")
-@statsd(namespace="tasks")
 def send_broadcast_event(broadcast_event_id):
     if not current_app.config['CBC_PROXY_ENABLED']:
         current_app.logger.info(f'CBC Proxy disabled, not sending broadcast_event {broadcast_event_id}')
@@ -114,7 +116,6 @@ def send_broadcast_event(broadcast_event_id):
 
 # max_retries=None: retry forever
 @notify_celery.task(bind=True, name="send-broadcast-provider-message", max_retries=None)
-@statsd(namespace="tasks")
 def send_broadcast_provider_message(self, broadcast_event_id, provider):
     broadcast_event = dao_get_broadcast_event_by_id(broadcast_event_id)
 
@@ -201,12 +202,4 @@ def send_broadcast_provider_message(self, broadcast_event_id, provider):
 
 @notify_celery.task(name='trigger-link-test')
 def trigger_link_test(provider):
-    identifier = str(uuid.uuid4())
-    formatted_seq_number = None
-    if provider == BroadcastProvider.VODAFONE:
-        sequence = Sequence('broadcast_provider_message_number_seq')
-        sequential_number = db.session.connection().execute(sequence)
-        formatted_seq_number = format_sequential_number(sequential_number)
-    message = f"Sending a link test to CBC proxy for provider {provider} with ID {identifier}"
-    current_app.logger.info(message)
-    cbc_proxy_client.get_proxy(provider).send_link_test(identifier, formatted_seq_number)
+    cbc_proxy_client.get_proxy(provider).send_link_test()

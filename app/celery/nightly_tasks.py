@@ -1,55 +1,53 @@
-from datetime import (
-    datetime,
-    timedelta
-)
+from datetime import datetime, timedelta
 
 import pytz
 from flask import current_app
-from notifications_utils.statsd_decorators import statsd
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import notify_celery, performance_platform_client, zendesk_client
+from app import notify_celery, zendesk_client
 from app.aws import s3
 from app.celery.service_callback_tasks import (
-    send_delivery_status_to_service,
     create_delivery_status_callback_data,
+    send_delivery_status_to_service,
 )
 from app.config import QueueNames
+from app.cronitor import cronitor
+from app.dao.fact_processing_time_dao import insert_update_processing_time
 from app.dao.inbound_sms_dao import delete_inbound_sms_older_than_retention
 from app.dao.jobs_dao import (
+    dao_archive_job,
     dao_get_jobs_older_than_data_retention,
-    dao_archive_job
 )
 from app.dao.notifications_dao import (
+    dao_get_notifications_processing_time_stats,
     dao_timeout_notifications,
     delete_notifications_older_than_retention_by_type,
 )
-from app.dao.service_callback_api_dao import get_service_delivery_status_callback_api_for_service
+from app.dao.service_callback_api_dao import (
+    get_service_delivery_status_callback_api_for_service,
+)
 from app.exceptions import NotificationTechnicalFailureException
 from app.models import (
-    Notification,
-    NOTIFICATION_SENDING,
     EMAIL_TYPE,
-    SMS_TYPE,
+    KEY_TYPE_NORMAL,
     LETTER_TYPE,
-    KEY_TYPE_NORMAL
+    NOTIFICATION_SENDING,
+    SMS_TYPE,
+    FactProcessingTime,
+    Notification,
 )
-from app.performance_platform import total_sent_notifications, processing_time
-from app.cronitor import cronitor
 from app.utils import get_london_midnight_in_utc
 
 
 @notify_celery.task(name="remove_sms_email_jobs")
 @cronitor("remove_sms_email_jobs")
-@statsd(namespace="tasks")
 def remove_sms_email_csv_files():
     _remove_csv_files([EMAIL_TYPE, SMS_TYPE])
 
 
 @notify_celery.task(name="remove_letter_jobs")
 @cronitor("remove_letter_jobs")
-@statsd(namespace="tasks")
 def remove_letter_csv_files():
     _remove_csv_files([LETTER_TYPE])
 
@@ -63,7 +61,6 @@ def _remove_csv_files(job_types):
 
 
 @notify_celery.task(name="delete-notifications-older-than-retention")
-@statsd(namespace="tasks")
 def delete_notifications_older_than_retention():
     delete_email_notifications_older_than_retention()
     delete_sms_notifications_older_than_retention()
@@ -72,7 +69,6 @@ def delete_notifications_older_than_retention():
 
 @notify_celery.task(name="delete-sms-notifications")
 @cronitor("delete-sms-notifications")
-@statsd(namespace="tasks")
 def delete_sms_notifications_older_than_retention():
     try:
         start = datetime.utcnow()
@@ -92,7 +88,6 @@ def delete_sms_notifications_older_than_retention():
 
 @notify_celery.task(name="delete-email-notifications")
 @cronitor("delete-email-notifications")
-@statsd(namespace="tasks")
 def delete_email_notifications_older_than_retention():
     try:
         start = datetime.utcnow()
@@ -112,7 +107,6 @@ def delete_email_notifications_older_than_retention():
 
 @notify_celery.task(name="delete-letter-notifications")
 @cronitor("delete-letter-notifications")
-@statsd(namespace="tasks")
 def delete_letter_notifications_older_than_retention():
     try:
         start = datetime.utcnow()
@@ -132,7 +126,6 @@ def delete_letter_notifications_older_than_retention():
 
 @notify_celery.task(name='timeout-sending-notifications')
 @cronitor('timeout-sending-notifications')
-@statsd(namespace="tasks")
 def timeout_notifications():
     technical_failure_notifications, temporary_failure_notifications = \
         dao_timeout_notifications(current_app.config.get('SENDING_NOTIFICATIONS_TIMEOUT_PERIOD'))
@@ -155,57 +148,8 @@ def timeout_notifications():
         raise NotificationTechnicalFailureException(message)
 
 
-@notify_celery.task(name='send-daily-performance-platform-stats')
-@cronitor('send-daily-performance-platform-stats')
-@statsd(namespace="tasks")
-def send_daily_performance_platform_stats(date=None):
-    # date is a string in the format of "YYYY-MM-DD"
-    if date is None:
-        date = (datetime.utcnow() - timedelta(days=1)).date()
-    else:
-        date = datetime.strptime(date, "%Y-%m-%d").date()
-
-    if performance_platform_client.active:
-
-        send_total_sent_notifications_to_performance_platform(bst_date=date)
-        processing_time.send_processing_time_to_performance_platform(bst_date=date)
-
-
-def send_total_sent_notifications_to_performance_platform(bst_date):
-    count_dict = total_sent_notifications.get_total_sent_notifications_for_day(bst_date)
-    start_time = get_london_midnight_in_utc(bst_date)
-
-    email_sent_count = count_dict['email']
-    sms_sent_count = count_dict['sms']
-    letter_sent_count = count_dict['letter']
-
-    current_app.logger.info(
-        "Attempting to update Performance Platform for {} with {} emails, {} text messages and {} letters"
-        .format(bst_date, email_sent_count, sms_sent_count, letter_sent_count)
-    )
-
-    total_sent_notifications.send_total_notifications_sent_for_day_stats(
-        start_time,
-        'sms',
-        sms_sent_count
-    )
-
-    total_sent_notifications.send_total_notifications_sent_for_day_stats(
-        start_time,
-        'email',
-        email_sent_count
-    )
-
-    total_sent_notifications.send_total_notifications_sent_for_day_stats(
-        start_time,
-        'letter',
-        letter_sent_count
-    )
-
-
 @notify_celery.task(name="delete-inbound-sms")
 @cronitor("delete-inbound-sms")
-@statsd(namespace="tasks")
 def delete_inbound_sms():
     try:
         start = datetime.utcnow()
@@ -224,7 +168,6 @@ def delete_inbound_sms():
 
 @notify_celery.task(name="raise-alert-if-letter-notifications-still-sending")
 @cronitor("raise-alert-if-letter-notifications-still-sending")
-@statsd(namespace="tasks")
 def raise_alert_if_letter_notifications_still_sending():
     still_sending_count, sent_date = get_letter_notifications_still_sending_when_they_shouldnt_be()
 
@@ -271,7 +214,6 @@ def get_letter_notifications_still_sending_when_they_shouldnt_be():
 
 @notify_celery.task(name='raise-alert-if-no-letter-ack-file')
 @cronitor('raise-alert-if-no-letter-ack-file')
-@statsd(namespace="tasks")
 def letter_raise_alert_if_no_ack_file_for_zip():
     # get a list of zip files since yesterday
     zip_file_set = set()
@@ -319,3 +261,25 @@ def letter_raise_alert_if_no_ack_file_for_zip():
         current_app.logger.info(
             "letter ack contains zip that is not for today: {}".format(ack_file_set - zip_file_set)
         )
+
+
+@notify_celery.task(name='save-daily-notification-processing-time')
+@cronitor("save-daily-notification-processing-time")
+def save_daily_notification_processing_time(bst_date=None):
+    # bst_date is a string in the format of "YYYY-MM-DD"
+    if bst_date is None:
+        # if a date is not provided, we run against yesterdays data
+        bst_date = (datetime.utcnow() - timedelta(days=1)).date()
+    else:
+        bst_date = datetime.strptime(bst_date, "%Y-%m-%d").date()
+
+    start_time = get_london_midnight_in_utc(bst_date)
+    end_time = get_london_midnight_in_utc(bst_date + timedelta(days=1))
+    result = dao_get_notifications_processing_time_stats(start_time, end_time)
+    insert_update_processing_time(
+        FactProcessingTime(
+            bst_date=bst_date,
+            messages_total=result.messages_total,
+            messages_within_10_secs=result.messages_within_10_secs
+        )
+    )

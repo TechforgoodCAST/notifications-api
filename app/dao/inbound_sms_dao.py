@@ -1,15 +1,21 @@
 from flask import current_app
-from sqlalchemy import desc, and_
-from sqlalchemy.orm import aliased
+from sqlalchemy import and_, desc
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import aliased
 
 from app import db
-from app.dao.dao_utils import transactional
-from app.models import InboundSms, InboundSmsHistory, Service, ServiceDataRetention, SMS_TYPE
+from app.dao.dao_utils import autocommit
+from app.models import (
+    SMS_TYPE,
+    InboundSms,
+    InboundSmsHistory,
+    Service,
+    ServiceDataRetention,
+)
 from app.utils import midnight_n_days_ago
 
 
-@transactional
+@autocommit
 def dao_create_inbound_sms(inbound_sms):
     db.session.add(inbound_sms)
 
@@ -65,7 +71,13 @@ def dao_count_inbound_sms_for_service(service_id, limit_days):
 def _insert_inbound_sms_history(subquery, query_limit=10000):
     offset = 0
     inbound_sms_query = db.session.query(
-        *[x.name for x in InboundSmsHistory.__table__.c]
+        InboundSms.id,
+        InboundSms.created_at,
+        InboundSms.service_id,
+        InboundSms.notify_number,
+        InboundSms.provider_date,
+        InboundSms.provider_reference,
+        InboundSms.provider
     ).filter(InboundSms.id.in_(subquery))
     inbound_sms_count = inbound_sms_query.count()
 
@@ -107,7 +119,7 @@ def _delete_inbound_sms(datetime_to_delete_from, query_filter):
     return deleted
 
 
-@transactional
+@autocommit
 def delete_inbound_sms_older_than_retention():
     current_app.logger.info('Deleting inbound sms for services with flexible data retention')
 

@@ -1,57 +1,61 @@
 import functools
+from datetime import datetime, timedelta
 from itertools import groupby
 from operator import attrgetter
-from datetime import (
-    datetime,
-    timedelta,
-)
 
 from botocore.exceptions import ClientError
 from flask import current_app
-from notifications_utils.international_billing_rates import INTERNATIONAL_BILLING_RATES
+from notifications_utils.international_billing_rates import (
+    INTERNATIONAL_BILLING_RATES,
+)
 from notifications_utils.recipients import (
-    validate_and_format_email_address,
     InvalidEmailError,
-    try_validate_and_format_phone_number
+    try_validate_and_format_phone_number,
+    validate_and_format_email_address,
 )
 from notifications_utils.timezones import convert_bst_to_utc, convert_utc_to_bst
-from sqlalchemy import (desc, func, asc, and_, or_)
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import functions
 from sqlalchemy.sql.expression import case
 from werkzeug.datastructures import MultiDict
 
-from app import db, create_uuid
-from app.aws.s3 import remove_s3_object, get_s3_bucket_objects
-from app.dao.dao_utils import transactional
+from app import create_uuid, db
+from app.aws.s3 import get_s3_bucket_objects, remove_s3_object
+from app.clients.sms.firetext import (
+    get_message_status_and_reason_from_firetext_code,
+)
+from app.dao.dao_utils import autocommit
 from app.letters.utils import get_letter_pdf_filename
 from app.models import (
-    FactNotificationStatus,
-    Notification,
-    NotificationHistory,
-    ProviderDetails,
+    EMAIL_TYPE,
     KEY_TYPE_NORMAL,
     KEY_TYPE_TEST,
     LETTER_TYPE,
     NOTIFICATION_CREATED,
     NOTIFICATION_DELIVERED,
-    NOTIFICATION_SENDING,
     NOTIFICATION_PENDING,
     NOTIFICATION_PENDING_VIRUS_CHECK,
-    NOTIFICATION_TECHNICAL_FAILURE,
-    NOTIFICATION_TEMPORARY_FAILURE,
     NOTIFICATION_PERMANENT_FAILURE,
+    NOTIFICATION_SENDING,
     NOTIFICATION_SENT,
     NOTIFICATION_STATUS_TYPES_COMPLETED,
+    NOTIFICATION_TECHNICAL_FAILURE,
+    NOTIFICATION_TEMPORARY_FAILURE,
     SMS_TYPE,
-    EMAIL_TYPE,
-    ServiceDataRetention,
+    FactNotificationStatus,
+    Notification,
+    NotificationHistory,
+    ProviderDetails,
     Service,
+    ServiceDataRetention,
 )
-from app.utils import get_london_midnight_in_utc
-from app.utils import midnight_n_days_ago, escape_special_characters
-from app.clients.sms.firetext import get_message_status_and_reason_from_firetext_code
+from app.utils import (
+    escape_special_characters,
+    get_london_midnight_in_utc,
+    midnight_n_days_ago,
+)
 
 
 def dao_get_last_date_template_was_used(template_id, service_id):
@@ -76,7 +80,7 @@ def dao_get_last_date_template_was_used(template_id, service_id):
     return last_date
 
 
-@transactional
+@autocommit
 def dao_create_notification(notification):
     if not notification.id:
         # need to populate defaulted fields before we create the notification history object
@@ -88,21 +92,21 @@ def dao_create_notification(notification):
 
 
 def _decide_permanent_temporary_failure(status, notification, detailed_status_code=None):
-    # If we get failure status from Firetext, we want to know if this is temporary or permanent failure.
-    # So we check the failure code to learn that.
-    # If there is no failure code, or we do not recognise the failure code, we do the following:
-    # if notifitcation goes form status pending to status failure, we mark it as temporary failure;
-    # if notification goes straight to status failure, we mark it as permanent failure.
-    if status == NOTIFICATION_PERMANENT_FAILURE and detailed_status_code not in [None, '000']:
-        try:
-            status, reason = get_message_status_and_reason_from_firetext_code(detailed_status_code)
-            current_app.logger.info(f'Updating notification id {notification.id} to status {status}, reason: {reason}')
-            return status
-        except KeyError:
-            current_app.logger.warning(f'Failure code {detailed_status_code} from Firetext not recognised')
-    # fallback option:
-    if notification.status == NOTIFICATION_PENDING and status == NOTIFICATION_PERMANENT_FAILURE:
-        status = NOTIFICATION_TEMPORARY_FAILURE
+    # Firetext will send us a pending status, followed by a success or failure status.
+    # When we get a failure status we need to look at the detailed_status_code to determine if the failure type
+    # is a permanent-failure or temporary-failure.
+    if notification.sent_by == 'firetext':
+        if status == NOTIFICATION_PERMANENT_FAILURE and detailed_status_code:
+            try:
+                status, reason = get_message_status_and_reason_from_firetext_code(detailed_status_code)
+                current_app.logger.info(
+                    f'Updating notification id {notification.id} to status {status}, reason: {reason}')
+                return status
+            except KeyError:
+                current_app.logger.warning(f'Failure code {detailed_status_code} from Firetext not recognised')
+        # fallback option:
+        if status == NOTIFICATION_PERMANENT_FAILURE and notification.status == NOTIFICATION_PENDING:
+            status = NOTIFICATION_TEMPORARY_FAILURE
     return status
 
 
@@ -120,7 +124,7 @@ def _update_notification_status(notification, status, detailed_status_code=None)
     return notification
 
 
-@transactional
+@autocommit
 def update_notification_status_by_id(notification_id, status, sent_by=None, detailed_status_code=None):
     notification = Notification.query.with_for_update().filter(Notification.id == notification_id).first()
 
@@ -156,7 +160,7 @@ def update_notification_status_by_id(notification_id, status, sent_by=None, deta
     )
 
 
-@transactional
+@autocommit
 def update_notification_status_by_reference(reference, status):
     notification = Notification.query.filter(Notification.reference == reference).first()
 
@@ -178,7 +182,7 @@ def update_notification_status_by_reference(reference, status):
     )
 
 
-@transactional
+@autocommit
 def dao_update_notification(notification):
     notification.updated_at = datetime.utcnow()
     db.session.add(notification)
@@ -325,18 +329,18 @@ def delete_notifications_older_than_retention_by_type(notification_type, qry_lim
 
     seven_days_ago = get_london_midnight_in_utc(convert_utc_to_bst(datetime.utcnow()).date()) - timedelta(days=7)
     services_with_data_retention = [x.service_id for x in flexible_data_retention]
-    service_ids_to_purge = db.session.query(Service.id).filter(Service.id.notin_(services_with_data_retention)).all()
+    service_ids_to_purge = Service.query.filter(Service.id.notin_(services_with_data_retention)).all()
 
-    for service_id in service_ids_to_purge:
+    for service in service_ids_to_purge:
         deleted += _move_notifications_to_notification_history(
-            notification_type, service_id, seven_days_ago, qry_limit)
+            notification_type, service.id, seven_days_ago, qry_limit)
 
     current_app.logger.info('Finished deleting {} notifications'.format(notification_type))
 
     return deleted
 
 
-@transactional
+@autocommit
 def insert_notification_history_delete_notifications(
     notification_type, service_id, timestamp_to_delete_backwards_from, qry_limit=50000
 ):
@@ -463,7 +467,7 @@ def _delete_letters_from_s3(
                     "Could not delete S3 object with filename: {}".format(s3_object['Key']))
 
 
-@transactional
+@autocommit
 def dao_delete_notifications_by_id(notification_id):
     db.session.query(Notification).filter(
         Notification.id == notification_id
@@ -573,7 +577,7 @@ def is_delivery_slow_for_providers(
     return slow_providers
 
 
-@transactional
+@autocommit
 def dao_update_notifications_by_reference(references, update_dict):
     updated_count = Notification.query.filter(
         Notification.reference.in_(references)
@@ -680,12 +684,15 @@ def dao_get_notifications_by_references(references):
     ).all()
 
 
-def dao_get_total_notifications_sent_per_day_for_performance_platform(start_date, end_date):
+def dao_get_notifications_processing_time_stats(start_date, end_date):
     """
+    For a given time range, returns the number of notifications sent and the number of
+    those notifications that we processed within 10 seconds
+
     SELECT
-    count(notification_history),
+    count(notifications),
     coalesce(sum(CASE WHEN sent_at - created_at <= interval '10 seconds' THEN 1 ELSE 0 END), 0)
-    FROM notification_history
+    FROM notifications
     WHERE
     created_at > 'START DATE' AND
     created_at < 'END DATE' AND
