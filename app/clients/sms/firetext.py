@@ -1,10 +1,10 @@
 import json
 import logging
-
 from time import monotonic
-from requests import request, RequestException
 
-from app.clients.sms import (SmsClient, SmsClientResponseException)
+from requests import RequestException, request
+
+from app.clients.sms import SmsClient, SmsClientResponseException
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ firetext_responses = {
 
 firetext_codes = {
     # code '000' means 'No errors reported'
+    '000': {'status': 'temporary-failure', 'reason': 'No error reported'},
     '101': {'status': 'permanent-failure', 'reason': 'Unknown Subscriber'},
     '102': {'status': 'temporary-failure', 'reason': 'Absent Subscriber'},
     '103': {'status': 'temporary-failure', 'reason': 'Subscriber Busy'},

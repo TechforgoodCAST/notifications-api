@@ -13,19 +13,11 @@ At the moment we run Python 3.6 in production. You will run into problems if you
 
 ### AWS credentials
 
-To run the API you will need appropriate AWS credentials. You should receive these from whoever administrates your AWS account. Make sure you've got both an access key id and a secret access key.
-
-Your aws credentials should be stored in a folder located at `~/.aws`. Follow [Amazon's instructions](http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html#cli-config-files) for storing them correctly.
-
-### Virtualenv
-
-```
-mkvirtualenv -p /usr/local/bin/python3 notifications-api
-```
+To run the API you will need appropriate AWS credentials. See the [Wiki](https://github.com/alphagov/notifications-manuals/wiki/aws-accounts#how-to-set-up-local-development) for more details.
 
 ### `environment.sh`
 
-Creating the environment.sh file. Replace [unique-to-environment] with your something unique to the environment. Your AWS credentials should be set up for notify-tools (the development/CI AWS account).
+Creating the environment.sh file. Replace [unique-to-environment] with your something unique to the environment.
 
 Create a local environment.sh file containing the following:
 
@@ -38,7 +30,7 @@ export FIRETEXT_API_KEY='FIRETEXT_ACTUAL_KEY'
 export NOTIFICATION_QUEUE_PREFIX='YOUR_OWN_PREFIX'
 
 export FLASK_APP=application.py
-export FLASK_DEBUG=1
+export FLASK_ENV=development
 export WERKZEUG_DEBUG_PIN=off
 "> environment.sh
 ```
@@ -64,40 +56,33 @@ To switch redis on you'll need to install it locally. On a OSX we've used brew f
 
 ##  To run the application
 
-First, run `scripts/bootstrap.sh` to install dependencies and create the databases.
+# install dependencies, etc.
+make bootstrap
 
-You need to run the api application and a local celery instance.
-
-There are two run scripts for running all the necessary parts.
-
+# run the web app
 ```
-scripts/run_app.sh
+make run-flask
 ```
 
+# run the background tasks
 ```
-scripts/run_celery.sh
+make run-celery
 ```
 
-Optionally you can also run this script to run the scheduled tasks:
-
+# run scheduled tasks (optional)
 ```
-scripts/run_celery_beat.sh
+make run-celery-beat
 ```
 
 
 ##  To test the application
 
-First, ensure that `scripts/bootstrap.sh` has been run, as it creates the test database.
-
-Then simply run
+# install dependencies, etc.
+make bootstrap
 
 ```
 make test
 ```
-
-That will run flake8 for code analysis and our unit test suite. If you wish to run our functional tests, instructions can be found in the
-[notifications-functional-tests](https://github.com/alphagov/notifications-functional-tests) repository.
-
 
 ## To update application dependencies
 

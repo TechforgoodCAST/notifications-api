@@ -1,29 +1,35 @@
 import csv
 import functools
+import itertools
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 import click
 import flask
-import itertools
 from click_datetime import Datetime as click_dt
 from flask import current_app, json
 from notifications_utils.recipients import RecipientCSV
+from notifications_utils.statsd_decorators import statsd
 from notifications_utils.template import SMSMessageTemplate
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import NoResultFound
-from notifications_utils.statsd_decorators import statsd
 
-from app import db, encryption
+from app import db
 from app.aws import s3
-from app.celery.tasks import record_daily_sorted_counts, process_row
-from app.celery.nightly_tasks import send_total_sent_notifications_to_performance_platform
-from app.celery.service_callback_tasks import send_delivery_status_to_service
 from app.celery.letters_pdf_tasks import get_pdf_for_templated_letter
-from app.celery.reporting_tasks import create_nightly_notification_status_for_day
+from app.celery.reporting_tasks import (
+    create_nightly_notification_status_for_day,
+)
+from app.celery.service_callback_tasks import (
+    create_delivery_status_callback_data,
+    send_delivery_status_to_service,
+)
+from app.celery.tasks import process_row, record_daily_sorted_counts
 from app.config import QueueNames
-from app.dao.annual_billing_dao import dao_create_or_update_annual_billing_for_year
+from app.dao.annual_billing_dao import (
+    dao_create_or_update_annual_billing_for_year,
+)
 from app.dao.fact_billing_dao import (
     delete_billing_data_for_service_for_day,
     fetch_billing_data_for_day,
@@ -31,36 +37,45 @@ from app.dao.fact_billing_dao import (
     update_fact_billing,
 )
 from app.dao.jobs_dao import dao_get_job_by_id
-from app.dao.organisation_dao import dao_get_organisation_by_email_address, dao_add_service_to_organisation
-
-from app.dao.provider_rates_dao import create_provider_rates as dao_create_provider_rates
-from app.dao.service_callback_api_dao import get_service_delivery_status_callback_api_for_service
+from app.dao.organisation_dao import (
+    dao_add_service_to_organisation,
+    dao_get_organisation_by_email_address,
+)
+from app.dao.provider_rates_dao import (
+    create_provider_rates as dao_create_provider_rates,
+)
+from app.dao.service_callback_api_dao import (
+    get_service_delivery_status_callback_api_for_service,
+)
 from app.dao.services_dao import (
-    delete_service_and_all_associated_db_objects,
     dao_fetch_all_services_by_user,
     dao_fetch_all_services_created_by_user,
     dao_fetch_service_by_id,
-    dao_update_service
+    dao_update_service,
+    delete_service_and_all_associated_db_objects,
 )
 from app.dao.templates_dao import dao_get_template_by_id
-from app.dao.users_dao import delete_model_user, delete_user_verify_codes, get_user_by_email
+from app.dao.users_dao import (
+    delete_model_user,
+    delete_user_verify_codes,
+    get_user_by_email,
+)
 from app.models import (
-    PROVIDERS,
-    NOTIFICATION_CREATED,
-    KEY_TYPE_TEST,
-    SMS_TYPE,
     EMAIL_TYPE,
+    KEY_TYPE_TEST,
     LETTER_TYPE,
-    User,
-    Notification,
-    Organisation,
+    NOTIFICATION_CREATED,
+    PROVIDERS,
+    SMS_TYPE,
     Domain,
-    Service,
     EmailBranding,
     LetterBranding,
+    Notification,
+    Organisation,
+    Service,
+    User,
 )
-from app.performance_platform.processing_time import send_processing_time_for_start_and_end
-from app.utils import DATETIME_FORMAT, get_london_midnight_in_utc, get_midnight_for_day_before
+from app.utils import get_london_midnight_in_utc
 
 
 @click.group(name='command', help='Additional commands')
@@ -219,59 +234,6 @@ def fix_notification_statuses_not_in_sync():
         result = db.session.execute(subq_hist).fetchall()
 
 
-@notify_command()
-@click.option('-s', '--start_date', required=True, help="start date inclusive", type=click_dt(format='%Y-%m-%d'))
-@click.option('-e', '--end_date', required=True, help="end date inclusive", type=click_dt(format='%Y-%m-%d'))
-def backfill_performance_platform_totals(start_date, end_date):
-    """
-    Send historical total messages sent to Performance Platform.
-
-    WARNING: This does not overwrite existing data. You need to delete
-             the existing data or Performance Platform will double-count.
-    """
-
-    delta = end_date - start_date
-
-    print('Sending total messages sent for all days between {} and {}'.format(start_date, end_date))
-
-    for i in range(delta.days + 1):
-
-        process_date = start_date + timedelta(days=i)
-
-        print('Sending total messages sent for {}'.format(
-            process_date.isoformat()
-        ))
-
-        send_total_sent_notifications_to_performance_platform(process_date)
-
-
-@notify_command()
-@click.option('-s', '--start_date', required=True, help="start date inclusive", type=click_dt(format='%Y-%m-%d'))
-@click.option('-e', '--end_date', required=True, help="end date inclusive", type=click_dt(format='%Y-%m-%d'))
-def backfill_processing_time(start_date, end_date):
-    """
-    Send historical processing time to Performance Platform.
-    """
-
-    delta = end_date - start_date
-
-    print('Sending notification processing-time data for all days between {} and {}'.format(start_date, end_date))
-
-    for i in range(delta.days + 1):
-        # because the tz conversion funcs talk about midnight, and the midnight before last,
-        # we want to pretend we're running this from the next morning, so add one.
-        process_date = start_date + timedelta(days=i + 1)
-
-        process_start_date = get_midnight_for_day_before(process_date)
-        process_end_date = get_london_midnight_in_utc(process_date)
-
-        print('Sending notification processing-time for {} - {}'.format(
-            process_start_date.isoformat(),
-            process_end_date.isoformat()
-        ))
-        send_processing_time_for_start_and_end(process_start_date, process_end_date)
-
-
 @notify_command(name='populate-annual-billing')
 @click.option('-y', '--year', required=True, type=int,
               help="""The year to populate the annual billing data for, i.e. 2019""")
@@ -363,19 +325,7 @@ def replay_service_callbacks(file_name, service_id):
         raise Exception("Some notifications for the given references were not found")
 
     for n in notifications:
-        data = {
-            "notification_id": str(n.id),
-            "notification_client_reference": n.client_reference,
-            "notification_to": n.to,
-            "notification_status": n.status,
-            "notification_created_at": n.created_at.strftime(DATETIME_FORMAT),
-            "notification_updated_at": n.updated_at.strftime(DATETIME_FORMAT),
-            "notification_sent_at": n.sent_at.strftime(DATETIME_FORMAT),
-            "notification_type": n.notification_type,
-            "service_callback_api_url": callback_api.url,
-            "service_callback_api_bearer_token": callback_api.bearer_token,
-        }
-        encrypted_status_update = encryption.encrypt(data)
+        encrypted_status_update = create_delivery_status_callback_data(n, callback_api)
         send_delivery_status_to_service.apply_async([str(n.id), encrypted_status_update],
                                                     queue=QueueNames.CALLBACKS)
 
@@ -546,7 +496,7 @@ def bulk_invite_user_to_service(file_name, service_id, user_id, auth_type, permi
     #  platform_admin
     #  view_activity
     # "send_texts,send_emails,send_letters,view_activity"
-    from app.invite.rest import create_invited_user
+    from app.service_invite.rest import create_invited_user
     file = open(file_name)
     for email_address in file:
         data = {

@@ -1,22 +1,29 @@
-import time
 import os
 import random
 import string
+import time
 import uuid
+from time import monotonic
 
 from celery import current_task
-from flask import _request_ctx_stack, request, g, jsonify, make_response, current_app, has_request_context
-from flask_sqlalchemy import SQLAlchemy as _SQLAlchemy
+from flask import (
+    current_app,
+    g,
+    has_request_context,
+    jsonify,
+    make_response,
+    request,
+)
 from flask_marshmallow import Marshmallow
 from flask_migrate import Migrate
+from flask_sqlalchemy import SQLAlchemy as _SQLAlchemy
 from gds_metrics import GDSMetrics
 from gds_metrics.metrics import Gauge, Histogram
-from time import monotonic
-from notifications_utils.clients.zendesk.zendesk_client import ZendeskClient
-from notifications_utils.clients.statsd.statsd_client import StatsdClient
-from notifications_utils.clients.redis.redis_client import RedisClient
-from notifications_utils.clients.encryption.encryption_client import Encryption
 from notifications_utils import logging, request_helper
+from notifications_utils.clients.encryption.encryption_client import Encryption
+from notifications_utils.clients.redis.redis_client import RedisClient
+from notifications_utils.clients.statsd.statsd_client import StatsdClient
+from notifications_utils.clients.zendesk.zendesk_client import ZendeskClient
 from sqlalchemy import event
 from werkzeug.exceptions import HTTPException as WerkzeugHTTPException
 from werkzeug.local import LocalProxy
@@ -30,7 +37,6 @@ from app.clients.email.aws_ses_stub import AwsSesStubClient
 from app.clients.sms.firetext import FiretextClient
 from app.clients.sms.mmg import MMGClient
 from app.clients.sms.twilio import TwilioClient
-from app.clients.performance_platform.performance_platform_client import PerformancePlatformClient
 
 
 class SQLAlchemy(_SQLAlchemy):
@@ -58,15 +64,14 @@ encryption = Encryption()
 zendesk_client = ZendeskClient()
 statsd_client = StatsdClient()
 redis_store = RedisClient()
-performance_platform_client = PerformancePlatformClient()
 cbc_proxy_client = CBCProxyClient()
 document_download_client = DocumentDownloadClient()
 metrics = GDSMetrics()
 
 notification_provider_clients = NotificationProviderClients()
 
-api_user = LocalProxy(lambda: _request_ctx_stack.top.api_user)
-authenticated_service = LocalProxy(lambda: _request_ctx_stack.top.authenticated_service)
+api_user = LocalProxy(lambda: g.api_user)
+authenticated_service = LocalProxy(lambda: g.authenticated_service)
 
 CONCURRENT_REQUESTS = Gauge(
     'concurrent_web_request_count',
@@ -113,7 +118,6 @@ def create_app(application):
     notify_celery.init_app(application)
     encryption.init_app(application)
     redis_store.init_app(application)
-    performance_platform_client.init_app(application)
     document_download_client.init_app(application)
 
     cbc_proxy_client.init_app(application)
@@ -132,42 +136,64 @@ def create_app(application):
 
 
 def register_blueprint(application):
-    from app.service.rest import service_blueprint
-    from app.service.callback_rest import service_callback_blueprint
-    from app.user.rest import user_blueprint
-    from app.template.rest import template_blueprint
-    from app.feedbacks.rest import feedbacks_blueprint
-    from app.status.healthcheck import status as status_blueprint
-    from app.job.rest import job_blueprint
-    from app.notifications.rest import notifications as notifications_blueprint
-    from app.invite.rest import invite as invite_blueprint
-    from app.accept_invite.rest import accept_invite
-    from app.template_statistics.rest import template_statistics as template_statistics_blueprint
-    from app.events.rest import events as events_blueprint
-    from app.provider_details.rest import provider_details as provider_details_blueprint
+    from app.authentication.auth import (
+        requires_admin_auth,
+        requires_auth,
+        requires_no_auth,
+    )
+    from app.billing.rest import billing_blueprint
+    from app.broadcast_message.rest import broadcast_message_blueprint
+    from app.complaint.complaint_rest import complaint_blueprint
     from app.email_branding.rest import email_branding_blueprint
+    from app.events.rest import events as events_blueprint
+    from app.feedbacks.rest import feedbacks_blueprint
     from app.inbound_number.rest import inbound_number_blueprint
     from app.inbound_sms.rest import inbound_sms as inbound_sms_blueprint
-    from app.notifications.receive_notifications import receive_notifications_blueprint
-    from app.notifications.notifications_sms_callback import sms_callback_blueprint
-    from app.notifications.notifications_letter_callback import letter_callback_blueprint
-    from app.authentication.auth import requires_admin_auth, requires_auth, requires_no_auth
+    from app.job.rest import job_blueprint
+    from app.letter_branding.letter_branding_rest import (
+        letter_branding_blueprint,
+    )
     from app.letters.rest import letter_job
-    from app.billing.rest import billing_blueprint
-    from app.organisation.rest import organisation_blueprint
+    from app.notifications.notifications_letter_callback import (
+        letter_callback_blueprint,
+    )
+    from app.notifications.notifications_sms_callback import (
+        sms_callback_blueprint,
+    )
+    from app.notifications.receive_notifications import (
+        receive_notifications_blueprint,
+    )
+    from app.notifications.rest import notifications as notifications_blueprint
     from app.organisation.invite_rest import organisation_invite_blueprint
-    from app.complaint.complaint_rest import complaint_blueprint
+    from app.organisation.rest import organisation_blueprint
+    from app.performance_dashboard.rest import performance_dashboard_blueprint
     from app.platform_stats.rest import platform_stats_blueprint
+    from app.provider_details.rest import (
+        provider_details as provider_details_blueprint,
+    )
+    from app.service.callback_rest import service_callback_blueprint
+    from app.service.rest import service_blueprint
+    from app.service_invite.rest import (
+        service_invite as service_invite_blueprint,
+    )
+    from app.status.healthcheck import status as status_blueprint
+    from app.template.rest import template_blueprint
     from app.template_folder.rest import template_folder_blueprint
-    from app.letter_branding.letter_branding_rest import letter_branding_blueprint
+    from app.template_statistics.rest import (
+        template_statistics as template_statistics_blueprint,
+    )
     from app.upload.rest import upload_blueprint
-    from app.broadcast_message.rest import broadcast_message_blueprint
+    from app.user.rest import user_blueprint
+    from app.webauthn.rest import webauthn_blueprint
 
     service_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(service_blueprint, url_prefix='/service')
 
     user_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(user_blueprint, url_prefix='/user')
+
+    webauthn_blueprint.before_request(requires_admin_auth)
+    application.register_blueprint(webauthn_blueprint)
 
     template_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(template_blueprint)
@@ -193,17 +219,17 @@ def register_blueprint(application):
     job_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(job_blueprint)
 
-    invite_blueprint.before_request(requires_admin_auth)
-    application.register_blueprint(invite_blueprint)
+    service_invite_blueprint.before_request(requires_admin_auth)
+    application.register_blueprint(service_invite_blueprint)
+
+    organisation_invite_blueprint.before_request(requires_admin_auth)
+    application.register_blueprint(organisation_invite_blueprint)
 
     inbound_number_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(inbound_number_blueprint)
 
     inbound_sms_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(inbound_sms_blueprint)
-
-    accept_invite.before_request(requires_admin_auth)
-    application.register_blueprint(accept_invite, url_prefix='/invite')
 
     template_statistics_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(template_statistics_blueprint)
@@ -232,11 +258,11 @@ def register_blueprint(application):
     organisation_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(organisation_blueprint, url_prefix='/organisations')
 
-    organisation_invite_blueprint.before_request(requires_admin_auth)
-    application.register_blueprint(organisation_invite_blueprint)
-
     complaint_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(complaint_blueprint)
+
+    performance_dashboard_blueprint.before_request(requires_admin_auth)
+    application.register_blueprint(performance_dashboard_blueprint)
 
     platform_stats_blueprint.before_request(requires_admin_auth)
     application.register_blueprint(platform_stats_blueprint, url_prefix='/platform-stats')
@@ -255,14 +281,34 @@ def register_blueprint(application):
 
 
 def register_v2_blueprints(application):
-    from app.v2.inbound_sms.get_inbound_sms import v2_inbound_sms_blueprint as get_inbound_sms
-    from app.v2.notifications.post_notifications import v2_notification_blueprint as post_notifications
-    from app.v2.notifications.get_notifications import v2_notification_blueprint as get_notifications
-    from app.v2.template.get_template import v2_template_blueprint as get_template
-    from app.v2.templates.get_templates import v2_templates_blueprint as get_templates
-    from app.v2.template.post_template import v2_template_blueprint as post_template
-    from app.v2.broadcast.post_broadcast import v2_broadcast_blueprint as post_broadcast
-    from app.authentication.auth import requires_auth
+    from app.authentication.auth import (
+        requires_auth,
+        requires_govuk_alerts_auth,
+    )
+    from app.v2.broadcast.post_broadcast import (
+        v2_broadcast_blueprint as post_broadcast,
+    )
+    from app.v2.govuk_alerts.get_broadcasts import (
+        v2_govuk_alerts_blueprint as get_broadcasts,
+    )
+    from app.v2.inbound_sms.get_inbound_sms import (
+        v2_inbound_sms_blueprint as get_inbound_sms,
+    )
+    from app.v2.notifications.get_notifications import (
+        v2_notification_blueprint as get_notifications,
+    )
+    from app.v2.notifications.post_notifications import (
+        v2_notification_blueprint as post_notifications,
+    )
+    from app.v2.template.get_template import (
+        v2_template_blueprint as get_template,
+    )
+    from app.v2.template.post_template import (
+        v2_template_blueprint as post_template,
+    )
+    from app.v2.templates.get_templates import (
+        v2_templates_blueprint as get_templates,
+    )
 
     post_notifications.before_request(requires_auth)
     application.register_blueprint(post_notifications)
@@ -284,6 +330,9 @@ def register_v2_blueprints(application):
 
     post_broadcast.before_request(requires_auth)
     application.register_blueprint(post_broadcast)
+
+    get_broadcasts.before_request(requires_govuk_alerts_auth)
+    application.register_blueprint(get_broadcasts)
 
 
 def init_app(app):
@@ -391,7 +440,7 @@ def setup_sqlalchemy_events(app):
                         'host': current_app.config['NOTIFY_APP_NAME'],  # worker name
                         'url_rule': current_task.name,  # task name
                     }
-                # anything else. migrations possibly.
+                # anything else. migrations possibly, or flask cli commands.
                 else:
                     current_app.logger.warning('Checked out sqlalchemy connection from outside of request/task')
                     connection_record.info['request_data'] = {

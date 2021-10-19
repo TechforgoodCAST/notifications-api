@@ -1,5 +1,6 @@
-import requests
 from functools import wraps
+
+import requests
 from flask import current_app
 
 
@@ -38,13 +39,11 @@ def cronitor(task_name):
         @wraps(func)
         def inner_decorator(*args, **kwargs):
             ping_cronitor('run')
+            status = 'fail'
             try:
                 ret = func(*args, **kwargs)
                 status = 'complete'
                 return ret
-            except Exception:
-                status = 'fail'
-                raise
             finally:
                 ping_cronitor(status)
 

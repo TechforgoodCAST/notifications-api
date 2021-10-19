@@ -1,15 +1,19 @@
-from requests import HTTPError
 from urllib.parse import parse_qs
-from requests.exceptions import ConnectTimeout, ReadTimeout
 
 import pytest
 import requests_mock
+from requests import HTTPError
+from requests.exceptions import ConnectTimeout, ReadTimeout
 
-from app.clients.sms.firetext import get_firetext_responses, SmsClientResponseException, FiretextClientResponseException
+from app.clients.sms.firetext import (
+    FiretextClientResponseException,
+    SmsClientResponseException,
+    get_firetext_responses,
+)
 
 
 @pytest.mark.parametrize('detailed_status_code, result', [
-    (None, ('delivered', None)), ('000', ('delivered', None))
+    (None, ('delivered', None)), ('000', ('delivered', 'No error reported'))
 ])
 def test_get_firetext_responses_should_return_correct_details_for_delivery(detailed_status_code, result):
     assert get_firetext_responses('0', detailed_status_code) == result

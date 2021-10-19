@@ -1,32 +1,39 @@
-from datetime import datetime, timedelta
 import uuid
+from datetime import datetime, timedelta
 
+import pytest
 from freezegun import freeze_time
 from sqlalchemy.exc import DataError
 from sqlalchemy.orm.exc import NoResultFound
-import pytest
 
 from app import db
-from app.dao.service_user_dao import dao_get_service_user, dao_update_service_user
+from app.dao.service_user_dao import (
+    dao_get_service_user,
+    dao_update_service_user,
+)
 from app.dao.users_dao import (
-    save_model_user,
-    save_user_attribute,
-    get_user_by_id,
-    delete_model_user,
-    increment_failed_login_count,
-    reset_failed_login_count,
-    get_user_by_email,
-    delete_codes_older_created_more_than_a_day_ago,
-    update_user_password,
     count_user_verify_codes,
     create_secret_code,
-    user_can_be_archived,
     dao_archive_user,
+    delete_codes_older_created_more_than_a_day_ago,
+    delete_model_user,
+    get_user_by_email,
+    get_user_by_id,
+    increment_failed_login_count,
+    reset_failed_login_count,
+    save_model_user,
+    save_user_attribute,
+    update_user_password,
+    user_can_be_archived,
 )
 from app.errors import InvalidRequest
 from app.models import EMAIL_AUTH_TYPE, User, VerifyCode
-
-from tests.app.db import create_permissions, create_service, create_template_folder, create_user
+from tests.app.db import (
+    create_permissions,
+    create_service,
+    create_template_folder,
+    create_user,
+)
 
 
 @freeze_time('2020-01-28T12:00:00')
@@ -152,19 +159,13 @@ def test_update_user_attribute(client, sample_user, user_attribute, user_value):
 
 
 @freeze_time('2020-01-24T12:00:00')
-@pytest.mark.parametrize('from_email', [True, False])
-def test_update_user_password(notify_api, notify_db, notify_db_session, sample_user, from_email):
+def test_update_user_password(notify_api, notify_db, notify_db_session, sample_user):
     sample_user.password_changed_at = datetime.utcnow() - timedelta(days=1)
-    sample_user.email_access_validated_at = datetime.utcnow() - timedelta(days=1)
     password = 'newpassword'
     assert not sample_user.check_password(password)
-    update_user_password(sample_user, password, validated_email_access=from_email)
+    update_user_password(sample_user, password)
     assert sample_user.check_password(password)
     assert sample_user.password_changed_at == datetime.utcnow()
-    if from_email:
-        assert sample_user.email_access_validated_at == datetime.utcnow()
-    else:
-        assert sample_user.email_access_validated_at == datetime.utcnow() - timedelta(days=1)
 
 
 def test_count_user_verify_codes(sample_user):
@@ -185,6 +186,18 @@ def test_create_secret_code_different_subsequent_codes():
 def test_create_secret_code_returns_5_digits():
     code = create_secret_code()
     assert len(str(code)) == 5
+
+
+def test_create_secret_code_never_repeats_consecutive_digits(mocker):
+    mocker.patch('app.dao.users_dao.SystemRandom.randrange', side_effect=[
+        1, 1, 1,
+        2,
+        3,
+        4, 4,
+        1,  # Repeated allowed if not consecutive
+        9, 9,  # Not called because we have 5 digits now
+    ])
+    assert create_secret_code() == '12341'
 
 
 @freeze_time('2018-07-07 12:00:00')

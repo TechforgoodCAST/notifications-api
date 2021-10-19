@@ -1,18 +1,14 @@
 import uuid
 from datetime import date, datetime, timedelta
 
-from sqlalchemy.sql.expression import asc, case, and_, func
-from sqlalchemy.orm import joinedload
-from sqlalchemy import cast, Float
 from flask import current_app
+from sqlalchemy import Float, cast
+from sqlalchemy.orm import joinedload
+from sqlalchemy.sql.expression import and_, asc, case, func
 
 from app import db
+from app.dao.dao_utils import VersionOptions, autocommit, version_class
 from app.dao.date_util import get_current_financial_year
-from app.dao.dao_utils import (
-    transactional,
-    version_class,
-    VersionOptions,
-)
 from app.dao.email_branding_dao import dao_get_email_branding_by_name
 from app.dao.letter_branding_dao import dao_get_letter_branding_by_name
 from app.dao.organisation_dao import dao_get_organisation_by_email_address
@@ -20,6 +16,17 @@ from app.dao.service_sms_sender_dao import insert_service_sms_sender
 from app.dao.service_user_dao import dao_get_service_user
 from app.dao.template_folder_dao import dao_get_valid_template_folders_by_id
 from app.models import (
+    CROWN_ORGANISATION_TYPES,
+    EMAIL_TYPE,
+    INTERNATIONAL_LETTERS,
+    INTERNATIONAL_SMS_TYPE,
+    KEY_TYPE_TEST,
+    LETTER_TYPE,
+    NHS_ORGANISATION_TYPES,
+    NON_CROWN_ORGANISATION_TYPES,
+    NOTIFICATION_PERMANENT_FAILURE,
+    SMS_TYPE,
+    UPLOAD_LETTERS,
     AnnualBilling,
     ApiKey,
     FactBilling,
@@ -31,27 +38,16 @@ from app.models import (
     Organisation,
     Permission,
     Service,
+    ServiceContactList,
+    ServiceEmailReplyTo,
+    ServiceLetterContact,
     ServicePermission,
     ServiceSmsSender,
-    ServiceEmailReplyTo,
-    ServiceContactList,
-    ServiceLetterContact,
     Template,
     TemplateHistory,
     TemplateRedacted,
     User,
     VerifyCode,
-    CROWN_ORGANISATION_TYPES,
-    EMAIL_TYPE,
-    INTERNATIONAL_SMS_TYPE,
-    KEY_TYPE_TEST,
-    NHS_ORGANISATION_TYPES,
-    NON_CROWN_ORGANISATION_TYPES,
-    NOTIFICATION_PERMANENT_FAILURE,
-    SMS_TYPE,
-    LETTER_TYPE,
-    UPLOAD_LETTERS,
-    INTERNATIONAL_LETTERS
 )
 from app.utils import (
     email_address_is_nhs,
@@ -251,7 +247,7 @@ def dao_fetch_all_services_created_by_user(user_id):
     return query.all()
 
 
-@transactional
+@autocommit
 @version_class(
     VersionOptions(ApiKey, must_write_history=False),
     VersionOptions(Service),
@@ -288,7 +284,7 @@ def dao_fetch_service_by_id_and_user(service_id, user_id):
     ).one()
 
 
-@transactional
+@autocommit
 @version_class(Service)
 def dao_create_service(
     service,
@@ -342,7 +338,7 @@ def dao_create_service(
     db.session.add(service)
 
 
-@transactional
+@autocommit
 @version_class(Service)
 def dao_update_service(service):
     db.session.add(service)
@@ -433,23 +429,11 @@ def dao_fetch_stats_for_service(service_id, limit_days):
 
 
 def dao_fetch_todays_stats_for_service(service_id):
+    today = date.today()
+    start_date = get_london_midnight_in_utc(today)
     return _stats_for_service_query(service_id).filter(
-        func.date(Notification.created_at) == date.today()
+        Notification.created_at >= start_date
     ).all()
-
-
-def fetch_todays_total_message_count(service_id):
-    result = db.session.query(
-        func.count(Notification.id).label('count')
-    ).filter(
-        Notification.service_id == service_id,
-        Notification.key_type != KEY_TYPE_TEST,
-        func.date(Notification.created_at) == date.today()
-    ).group_by(
-        Notification.notification_type,
-        Notification.status,
-    ).first()
-    return 0 if result is None else result.count
 
 
 def _stats_for_service_query(service_id):
@@ -511,7 +495,7 @@ def dao_fetch_todays_stats_for_all_services(include_from_test_key=True, only_act
     return query.all()
 
 
-@transactional
+@autocommit
 @version_class(
     VersionOptions(ApiKey, must_write_history=False),
     VersionOptions(Service),
@@ -530,7 +514,7 @@ def dao_suspend_service(service_id):
     service.active = False
 
 
-@transactional
+@autocommit
 @version_class(Service)
 def dao_resume_service(service_id):
     service = Service.query.get(service_id)
@@ -567,7 +551,7 @@ def dao_find_services_sending_to_tv_numbers(start_date, end_date, threshold=500)
     ).all()
 
 
-def dao_find_services_with_high_failure_rates(start_date, end_date, threshold=100):
+def dao_find_services_with_high_failure_rates(start_date, end_date, threshold=1000):
     subquery = db.session.query(
         func.count(Notification.id).label('total_count'),
         Notification.service_id.label('service_id')
@@ -611,6 +595,26 @@ def dao_find_services_with_high_failure_rates(start_date, end_date, threshold=10
         subquery.c.total_count
     ).having(
         cast(func.count(Notification.id), Float) / cast(subquery.c.total_count, Float) >= 0.25
+    )
+
+    return query.all()
+
+
+def get_live_services_with_organisation():
+    query = db.session.query(
+        Service.id.label("service_id"),
+        Service.name.label("service_name"),
+        Organisation.id.label("organisation_id"),
+        Organisation.name.label("organisation_name")
+    ).outerjoin(
+        Service.organisation
+    ).filter(
+        Service.count_as_live.is_(True),
+        Service.active.is_(True),
+        Service.restricted.is_(False)
+    ).order_by(
+        Organisation.name,
+        Service.name
     )
 
     return query.all()

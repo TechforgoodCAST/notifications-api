@@ -1,7 +1,8 @@
 import urllib
 
 from flask import current_app
-from notifications_utils.s3 import S3ObjectNotFound, s3download as utils_s3download
+from notifications_utils.s3 import S3ObjectNotFound
+from notifications_utils.s3 import s3download as utils_s3download
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import create_random_identifier
@@ -9,32 +10,36 @@ from app.config import QueueNames
 from app.dao.notifications_dao import _update_notification_status
 from app.dao.service_email_reply_to_dao import dao_get_reply_to_by_id
 from app.dao.service_sms_sender_dao import dao_get_service_sms_senders_by_id
-from app.notifications.validators import (
-    check_service_has_permission,
-    check_service_over_daily_message_limit,
-    validate_and_format_recipient,
-    validate_template,
-    validate_address)
-from app.notifications.process_notifications import (
-    persist_notification,
-    send_notification_to_queue
-)
-from app.models import (
-    KEY_TYPE_NORMAL,
-    PRIORITY,
-    SMS_TYPE,
-    EMAIL_TYPE,
-    LETTER_TYPE,
-    NOTIFICATION_DELIVERED,
-)
 from app.dao.services_dao import dao_fetch_service_by_id
-from app.dao.templates_dao import dao_get_template_by_id_and_service_id, get_precompiled_letter_template
+from app.dao.templates_dao import (
+    dao_get_template_by_id_and_service_id,
+    get_precompiled_letter_template,
+)
 from app.dao.users_dao import get_user_by_id
 from app.letters.utils import (
     get_billable_units_for_letter_page_count,
     get_letter_pdf_filename,
     get_page_count,
     move_uploaded_pdf_to_letters_bucket,
+)
+from app.models import (
+    EMAIL_TYPE,
+    KEY_TYPE_NORMAL,
+    LETTER_TYPE,
+    NOTIFICATION_DELIVERED,
+    PRIORITY,
+    SMS_TYPE,
+)
+from app.notifications.process_notifications import (
+    persist_notification,
+    send_notification_to_queue,
+)
+from app.notifications.validators import (
+    check_service_has_permission,
+    check_service_over_daily_message_limit,
+    validate_address,
+    validate_and_format_recipient,
+    validate_template,
 )
 from app.v2.errors import BadRequestError
 
@@ -76,12 +81,16 @@ def send_one_off_notification(service_id, post_data):
         allow_guest_list_recipients=False,
     )
     postage = None
+    client_reference = None
     if template.template_type == LETTER_TYPE:
         # Validate address and set postage to europe|rest-of-world if international letter,
         # otherwise persist_notification with use template postage
         postage = validate_address(service, personalisation)
         if not postage:
             postage = template.postage
+        from app.utils import get_reference_from_personalisation
+        client_reference = get_reference_from_personalisation(personalisation)
+
     validate_created_by(service, post_data['created_by'])
 
     sender_id = post_data.get('sender_id', None)
@@ -103,7 +112,8 @@ def send_one_off_notification(service_id, post_data):
         created_by_id=post_data['created_by'],
         reply_to_text=reply_to,
         reference=create_one_off_reference(template.template_type),
-        postage=postage
+        postage=postage,
+        client_reference=client_reference
     )
 
     queue_name = QueueNames.PRIORITY if template.process_type == PRIORITY else None

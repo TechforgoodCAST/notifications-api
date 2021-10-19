@@ -3,56 +3,65 @@ import uuid
 from datetime import datetime
 from urllib.parse import urlencode
 
-from flask import (jsonify, request, Blueprint, current_app, abort)
+from flask import Blueprint, abort, current_app, jsonify, request
 from sqlalchemy.exc import IntegrityError
 
 from app.config import QueueNames
+from app.dao.permissions_dao import permission_dao
+from app.dao.service_user_dao import (
+    dao_get_service_user,
+    dao_update_service_user,
+)
+from app.dao.services_dao import dao_fetch_service_by_id
+from app.dao.template_folder_dao import (
+    dao_get_template_folder_by_id_and_service_id,
+)
+from app.dao.templates_dao import dao_get_template_by_id
 from app.dao.users_dao import (
-    get_user_by_id,
-    save_model_user,
+    count_user_verify_codes,
+    create_secret_code,
     create_user_code,
+    dao_archive_user,
+    get_user_and_accounts,
+    get_user_by_email,
+    get_user_by_id,
     get_user_code,
-    use_user_code,
+    get_users_by_partial_email,
     increment_failed_login_count,
     reset_failed_login_count,
-    get_user_by_email,
-    get_users_by_partial_email,
-    create_secret_code,
+    save_model_user,
     save_user_attribute,
     update_user_password,
-    count_user_verify_codes,
-    get_user_and_accounts,
-    dao_archive_user,
+    use_user_code,
 )
-from app.dao.permissions_dao import permission_dao
-from app.dao.service_user_dao import dao_get_service_user, dao_update_service_user
-from app.dao.services_dao import dao_fetch_service_by_id
-from app.dao.templates_dao import dao_get_template_by_id
-from app.dao.template_folder_dao import dao_get_template_folder_by_id_and_service_id
-from app.models import KEY_TYPE_NORMAL, Permission, Service, SMS_TYPE, EMAIL_TYPE
+from app.errors import InvalidRequest, register_errors
+from app.models import (
+    EMAIL_TYPE,
+    KEY_TYPE_NORMAL,
+    SMS_TYPE,
+    Permission,
+    Service,
+)
 from app.notifications.process_notifications import (
     persist_notification,
-    send_notification_to_queue
-)
-from app.schemas import (
-    email_data_request_schema,
-    partial_email_data_request_schema,
-    create_user_schema,
-    user_update_schema_load_json,
-    user_update_password_schema_load_json
-)
-from app.errors import (
-    register_errors,
-    InvalidRequest
-)
-from app.utils import url_with_token
-from app.user.users_schema import (
-    post_verify_code_schema,
-    post_send_user_sms_code_schema,
-    post_send_user_email_code_schema,
-    post_set_permissions_schema,
+    send_notification_to_queue,
 )
 from app.schema_validation import validate
+from app.schemas import (
+    create_user_schema,
+    email_data_request_schema,
+    partial_email_data_request_schema,
+    user_update_password_schema_load_json,
+    user_update_schema_load_json,
+)
+from app.user.users_schema import (
+    post_send_user_email_code_schema,
+    post_send_user_sms_code_schema,
+    post_set_permissions_schema,
+    post_verify_code_schema,
+    post_verify_webauthn_schema,
+)
+from app.utils import url_with_token
 
 user_blueprint = Blueprint('user', __name__)
 register_errors(user_blueprint)
@@ -63,9 +72,9 @@ def handle_integrity_error(exc):
     """
     Handle integrity errors caused by the auth type/mobile number check constraint
     """
-    if 'ck_users_mobile_or_email_auth' in str(exc):
+    if 'ck_user_has_mobile_or_other_auth' in str(exc):
         # we don't expect this to trip, so still log error
-        current_app.logger.exception('Check constraint ck_users_mobile_or_email_auth triggered')
+        current_app.logger.exception('Check constraint ck_user_has_mobile_or_other_auth triggered')
         return jsonify(result='error', message='Mobile number must be set if auth_type is set to sms_auth'), 400
 
     raise exc
@@ -203,6 +212,38 @@ def verify_user_code(user_id):
     save_model_user(user_to_verify)
 
     use_user_code(code.id)
+    return jsonify({}), 204
+
+
+# TODO: Remove the "verify" endpoint once admin no longer points at it
+@user_blueprint.route('/<uuid:user_id>/complete/webauthn-login', methods=['POST'])
+@user_blueprint.route('/<uuid:user_id>/verify/webauthn-login', methods=['POST'])
+def complete_login_after_webauthn_authentication_attempt(user_id):
+    """
+    complete login after a webauthn authentication. There's nothing webauthn specific in this code
+    but the sms/email flows do this as part of `verify_user_code` above and this is the equivalent spot in the
+    webauthn flow.
+    If the authentication was successful, we've already confirmed the user holds the right security key,
+    but we still need to check the max login count and set up a current_session_id and last_logged_in_at here.
+    If the authentication was unsuccessful then we just bump the failed_login_count in the db.
+    """
+    data = request.get_json()
+    validate(data, post_verify_webauthn_schema)
+
+    user = get_user_by_id(user_id=user_id)
+    successful = data['successful']
+
+    if user.failed_login_count >= current_app.config.get('MAX_VERIFY_CODE_COUNT'):
+        raise InvalidRequest("Maximum login count exceeded", status_code=403)
+
+    if successful:
+        user.current_session_id = str(uuid.uuid4())
+        user.logged_in_at = datetime.utcnow()
+        user.failed_login_count = 0
+        save_model_user(user)
+    else:
+        increment_failed_login_count(user)
+
     return jsonify({}), 204
 
 
@@ -385,7 +426,7 @@ def set_permissions(user_id, service_id):
     # TODO fix security hole, how do we verify that the user
     # who is making this request has permission to make the request.
     service_user = dao_get_service_user(user_id, service_id)
-    user = service_user.user
+    user = get_user_by_id(user_id)
     service = dao_fetch_service_by_id(service_id=service_id)
 
     data = request.get_json()
@@ -410,6 +451,19 @@ def set_permissions(user_id, service_id):
     return jsonify({}), 204
 
 
+@user_blueprint.route('/email', methods=['POST'])
+def fetch_user_by_email():
+
+    email, errors = email_data_request_schema.load(request.get_json())
+    if errors:
+        raise InvalidRequest(message=errors, status_code=400)
+
+    fetched_user = get_user_by_email(email['email'])
+    result = fetched_user.serialize()
+    return jsonify(data=result)
+
+
+# TODO: Deprecate this GET endpoint
 @user_blueprint.route('/email', methods=['GET'])
 def get_by_email():
     email = request.args.get('email')
@@ -465,11 +519,10 @@ def update_password(user_id):
     user = get_user_by_id(user_id=user_id)
     req_json = request.get_json()
     password = req_json.get('_password')
-    validated_email_access = req_json.pop('validated_email_access', False)
     update_dct, errors = user_update_password_schema_load_json.load(req_json)
     if errors:
         raise InvalidRequest(errors, status_code=400)
-    update_user_password(user, password, validated_email_access=validated_email_access)
+    update_user_password(user, password)
     return jsonify(data=user.serialize()), 200
 
 

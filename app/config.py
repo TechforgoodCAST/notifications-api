@@ -1,9 +1,10 @@
-from datetime import timedelta
-import os
 import json
+import os
+from datetime import timedelta
 
 from celery.schedules import crontab
 from kombu import Exchange, Queue
+
 from app.utils import get_env_var
 
 if get_env_var('VCAP_SERVICES'):
@@ -85,8 +86,16 @@ class Config(object):
     # URL of api app (on AWS this is the internal api endpoint)
     API_HOST_NAME = get_env_var('API_HOST_NAME')
 
-    # secrets that internal apps, such as the admin app or document download, must use to authenticate with the API
+    # LEGACY: replacing with INTERNAL_CLIENT_API_KEYS
     API_INTERNAL_SECRETS = json.loads(get_env_var('API_INTERNAL_SECRETS', '[]'))
+
+    # secrets that internal apps, such as the admin app or document download, must use to authenticate with the API
+    ADMIN_CLIENT_ID = 'notify-admin'
+    GOVUK_ALERTS_CLIENT_ID = 'govuk-alerts'
+
+    INTERNAL_CLIENT_API_KEYS = {
+        ADMIN_CLIENT_ID: API_INTERNAL_SECRETS
+    }
 
     # encyption secret/salt
     SECRET_KEY = get_env_var('SECRET_KEY')
@@ -114,10 +123,6 @@ class Config(object):
     EXPIRE_CACHE_TEN_MINUTES = 600
     EXPIRE_CACHE_EIGHT_DAYS = 8 * 24 * 60 * 60
 
-    # Performance platform
-    PERFORMANCE_PLATFORM_ENABLED = False
-    PERFORMANCE_PLATFORM_URL = 'https://www.performance.service.gov.uk/data/govuk-notify/'
-
     # Zendesk
     ZENDESK_API_KEY = get_env_var('ZENDESK_API_KEY')
 
@@ -137,7 +142,6 @@ class Config(object):
     ###########################
 
     NOTIFY_ENVIRONMENT = 'development'
-    ADMIN_CLIENT_USER_NAME = 'notify-admin'
     AWS_REGION = 'eu-west-1'
     INVITATION_EXPIRATION_DAYS = 2
     NOTIFY_APP_NAME = 'api'
@@ -183,7 +187,6 @@ class Config(object):
     MOU_SIGNER_RECEIPT_TEMPLATE_ID = '4fd2e43c-309b-4e50-8fb8-1955852d9d71'
     MOU_SIGNED_ON_BEHALF_SIGNER_RECEIPT_TEMPLATE_ID = 'c20206d5-bf03-4002-9a90-37d5032d9e84'
     MOU_SIGNED_ON_BEHALF_ON_BEHALF_RECEIPT_TEMPLATE_ID = '522b6657-5ca5-4368-a294-6b527703bd0b'
-    MOU_NOTIFY_TEAM_ALERT_TEMPLATE_ID = 'd0e66c4c-0c50-43f0-94f5-f85b613202d4'
     NOTIFY_ADMIN_OF_GO_LIVE_REQUEST_TEMPLATE_ID = '63ec0cba-6178-4bdf-b44c-fbab042e4f4e'
     NEW_SUPPORT_REQUEST = '82456472-ca40-4dda-9328-d08af07fade5'
 
@@ -277,8 +280,8 @@ class Config(object):
             'schedule': crontab(hour=1, minute=40),
             'options': {'queue': QueueNames.PERIODIC}
         },
-        'send-daily-performance-platform-stats': {
-            'task': 'send-daily-performance-platform-stats',
+        'save-daily-notification-processing-time': {
+            'task': 'save-daily-notification-processing-time',
             'schedule': crontab(hour=2, minute=0),
             'options': {'queue': QueueNames.PERIODIC}
         },
@@ -295,7 +298,7 @@ class Config(object):
         },
         'check-if-letters-still-in-created': {
             'task': 'check-if-letters-still-in-created',
-            'schedule': crontab(day_of_week='mon-fri', hour=9, minute=0),
+            'schedule': crontab(day_of_week='mon-fri', hour=7, minute=0),
             'options': {'queue': QueueNames.PERIODIC}
         },
         'check-if-letters-still-pending-virus-check': {
@@ -323,11 +326,6 @@ class Config(object):
         'raise-alert-if-no-letter-ack-file': {
             'task': 'raise-alert-if-no-letter-ack-file',
             'schedule': crontab(hour=23, minute=00),
-            'options': {'queue': QueueNames.PERIODIC}
-        },
-        'send-canary-to-cbc-proxy': {
-            'task': 'send-canary-to-cbc-proxy',
-            'schedule': timedelta(minutes=5),
             'options': {'queue': QueueNames.PERIODIC}
         },
         'trigger-link-tests': {
@@ -410,7 +408,10 @@ class Development(Config):
     TRANSIENT_UPLOADED_LETTERS = get_env_var('TRANSIENT_UPLOADED_LETTERS', 'development-transient-uploaded-letters')
     LETTER_SANITISE_BUCKET_NAME = get_env_var('LETTER_SANITISE_BUCKET_NAME', 'development-letters-sanitise')
 
-    API_INTERNAL_SECRETS = ['dev-notify-secret-key']
+    INTERNAL_CLIENT_API_KEYS = {
+        Config.ADMIN_CLIENT_ID: ['dev-notify-secret-key'],
+        Config.GOVUK_ALERTS_CLIENT_ID: ['govuk-alerts-secret-key']
+    }
     SECRET_KEY = 'dev-notify-secret-key'
     DANGEROUS_SALT = 'dev-notify-salt'
 

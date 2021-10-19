@@ -1,25 +1,33 @@
 import json
-import pytest
-from unittest import mock
-from uuid import UUID
+import uuid
 from datetime import datetime
+from unittest import mock
 
+import pytest
 from flask import url_for
 from freezegun import freeze_time
 
+from app.dao.permissions_dao import default_service_permissions
+from app.dao.service_user_dao import (
+    dao_get_service_user,
+    dao_update_service_user,
+)
 from app.models import (
-    User,
-    Permission,
+    EMAIL_AUTH_TYPE,
     MANAGE_SETTINGS,
     MANAGE_TEMPLATES,
-    Notification,
     SMS_AUTH_TYPE,
-    EMAIL_AUTH_TYPE
+    Notification,
+    Permission,
+    User,
 )
-from app.dao.permissions_dao import default_service_permissions
-from app.dao.service_user_dao import dao_get_service_user, dao_update_service_user
-from tests import create_authorization_header
-from tests.app.db import create_service, create_template_folder, create_organisation, create_user
+from tests import create_service_authorization_header
+from tests.app.db import (
+    create_organisation,
+    create_service,
+    create_template_folder,
+    create_user,
+)
 
 
 def test_get_user_list(admin_request, sample_service):
@@ -64,6 +72,7 @@ def test_get_user(admin_request, sample_service, sample_organisation):
     assert fetched['permissions'].keys() == {str(sample_service.id)}
     assert fetched['services'] == [str(sample_service.id)]
     assert fetched['organisations'] == [str(sample_organisation.id)]
+    assert fetched['can_use_webauthn'] is False
     assert sorted(fetched['permissions'][str(sample_service.id)]) == sorted(expected_permissions)
 
 
@@ -106,7 +115,7 @@ def test_post_user(client, notify_db, notify_db_session):
         "permissions": {},
         "auth_type": EMAIL_AUTH_TYPE
     }
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
     resp = client.post(
         url_for('user.create_user'),
@@ -151,7 +160,7 @@ def test_post_user_missing_attribute_email(client, notify_db, notify_db_session)
         "failed_login_count": 0,
         "permissions": {}
     }
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
     resp = client.post(
         url_for('user.create_user'),
@@ -177,7 +186,7 @@ def test_create_user_missing_attribute_password(client, notify_db, notify_db_ses
         "failed_login_count": 0,
         "permissions": {}
     }
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
     resp = client.post(
         url_for('user.create_user'),
@@ -248,7 +257,7 @@ def test_post_user_attribute(client, sample_user, user_attribute, user_value):
     update_dict = {
         user_attribute: user_value
     }
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
 
     resp = client.post(
@@ -270,7 +279,7 @@ def test_post_user_attribute(client, sample_user, user_attribute, user_value):
         },
         recipient='newuser@mail.com', reply_to_text='notify@gov.uk',
         service=mock.ANY,
-        template_id=UUID('c73f1d71-4049-46d5-a647-d013bdeca3f0'), template_version=1
+        template_id=uuid.UUID('c73f1d71-4049-46d5-a647-d013bdeca3f0'), template_version=1
     )),
     ('mobile_number', '+4407700900460', dict(
         api_key_id=None, key_type='normal', notification_type='sms',
@@ -279,7 +288,7 @@ def test_post_user_attribute(client, sample_user, user_attribute, user_value):
             'email address': 'notify@digital.cabinet-office.gov.uk'
         },
         recipient='+4407700900460', reply_to_text='testing', service=mock.ANY,
-        template_id=UUID('8a31520f-4751-4789-8ea1-fe54496725eb'), template_version=1
+        template_id=uuid.UUID('8a31520f-4751-4789-8ea1-fe54496725eb'), template_version=1
     ))
 ])
 def test_post_user_attribute_with_updated_by(
@@ -292,7 +301,7 @@ def test_post_user_attribute_with_updated_by(
         user_attribute: user_value,
         'updated_by': str(updater.id)
     }
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
     mock_persist_notification = mocker.patch('app.user.rest.persist_notification')
     mocker.patch('app.user.rest.send_notification_to_queue')
@@ -315,7 +324,7 @@ def test_archive_user(mocker, client, sample_user):
 
     response = client.post(
         url_for('user.archive_user', user_id=sample_user.id),
-        headers=[create_authorization_header()]
+        headers=[create_service_authorization_header()]
     )
 
     assert response.status_code == 204
@@ -327,7 +336,7 @@ def test_archive_user_when_user_does_not_exist_gives_404(mocker, client, fake_uu
 
     response = client.post(
         url_for('user.archive_user', user_id=fake_uuid),
-        headers=[create_authorization_header()]
+        headers=[create_service_authorization_header()]
     )
 
     assert response.status_code == 404
@@ -339,7 +348,7 @@ def test_archive_user_when_user_cannot_be_archived(mocker, client, sample_user):
 
     response = client.post(
         url_for('user.archive_user', user_id=sample_user.id),
-        headers=[create_authorization_header()]
+        headers=[create_service_authorization_header()]
     )
     json_resp = json.loads(response.get_data(as_text=True))
 
@@ -351,7 +360,7 @@ def test_archive_user_when_user_cannot_be_archived(mocker, client, sample_user):
 
 def test_get_user_by_email(client, sample_service):
     sample_user = sample_service.users[0]
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     url = url_for('user.get_by_email', email=sample_user.email_address)
     resp = client.get(url, headers=[header])
     assert resp.status_code == 200
@@ -369,7 +378,7 @@ def test_get_user_by_email(client, sample_service):
 
 
 def test_get_user_by_email_not_found_returns_404(client, sample_user):
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     url = url_for('user.get_by_email', email='no_user@digital.gov.uk')
     resp = client.get(url, headers=[header])
     assert resp.status_code == 404
@@ -379,7 +388,7 @@ def test_get_user_by_email_not_found_returns_404(client, sample_user):
 
 
 def test_get_user_by_email_bad_url_returns_404(client, sample_user):
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     url = '/user/email'
     resp = client.get(url, headers=[header])
     assert resp.status_code == 400
@@ -388,8 +397,46 @@ def test_get_user_by_email_bad_url_returns_404(client, sample_user):
     assert json_resp['message'] == 'Invalid request. Email query string param required'
 
 
+def test_fetch_user_by_email(admin_request, notify_db_session):
+    user = create_user(email='foo@bar.com')
+
+    create_user(email='foo@bar.com.other_email')
+    create_user(email='other_email.foo@bar.com')
+
+    resp = admin_request.post(
+        'user.fetch_user_by_email',
+        _data={'email': user.email_address},
+        _expected_status=200
+    )
+
+    assert resp['data']['id'] == str(user.id)
+    assert resp['data']['email_address'] == user.email_address
+
+
+def test_fetch_user_by_email_not_found_returns_404(admin_request, notify_db_session):
+    create_user(email='foo@bar.com.other_email')
+
+    resp = admin_request.post(
+        'user.fetch_user_by_email',
+        _data={'email': 'doesnt@exist.com'},
+        _expected_status=404
+    )
+    assert resp['result'] == 'error'
+    assert resp['message'] == 'No result found'
+
+
+def test_fetch_user_by_email_without_email_returns_400(admin_request, notify_db_session):
+    resp = admin_request.post(
+        'user.fetch_user_by_email',
+        _data={},
+        _expected_status=400
+    )
+    assert resp['result'] == 'error'
+    assert resp['message'] == {'email': ['Missing data for required field.']}
+
+
 def test_get_user_with_permissions(client, sample_user_service_permission):
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     response = client.get(url_for('user.get_user', user_id=str(sample_user_service_permission.user.id)),
                           headers=[header])
     assert response.status_code == 200
@@ -399,7 +446,7 @@ def test_get_user_with_permissions(client, sample_user_service_permission):
 
 def test_set_user_permissions(client, sample_user, sample_service):
     data = json.dumps({'permissions': [{'permission': MANAGE_SETTINGS}]})
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), header]
     response = client.post(
         url_for(
@@ -418,7 +465,7 @@ def test_set_user_permissions(client, sample_user, sample_service):
 
 def test_set_user_permissions_multiple(client, sample_user, sample_service):
     data = json.dumps({'permissions': [{'permission': MANAGE_SETTINGS}, {'permission': MANAGE_TEMPLATES}]})
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), header]
     response = client.post(
         url_for(
@@ -441,7 +488,7 @@ def test_set_user_permissions_multiple(client, sample_user, sample_service):
 
 def test_set_user_permissions_remove_old(client, sample_user, sample_service):
     data = json.dumps({'permissions': [{'permission': MANAGE_SETTINGS}]})
-    header = create_authorization_header()
+    header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), header]
     response = client.post(
         url_for(
@@ -467,7 +514,7 @@ def test_set_user_folder_permissions(client, sample_user, sample_service):
             'user.set_permissions',
             user_id=str(sample_user.id),
             service_id=str(sample_service.id)),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()],
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()],
         data=data)
 
     assert response.status_code == 204
@@ -490,7 +537,7 @@ def test_set_user_folder_permissions_when_user_does_not_belong_to_service(client
             'user.set_permissions',
             user_id=str(sample_user.id),
             service_id=str(service.id)),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()],
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()],
         data=data)
 
     assert response.status_code == 404
@@ -522,7 +569,7 @@ def test_set_user_folder_permissions_does_not_affect_permissions_for_other_servi
             'user.set_permissions',
             user_id=str(sample_user.id),
             service_id=str(sample_service.id)),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()],
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()],
         data=data)
 
     assert response.status_code == 204
@@ -547,7 +594,7 @@ def test_update_user_folder_permissions(client, sample_user, sample_service):
             'user.set_permissions',
             user_id=str(sample_user.id),
             service_id=str(sample_service.id)),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()],
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()],
         data=data)
 
     assert response.status_code == 204
@@ -571,7 +618,7 @@ def test_remove_user_folder_permissions(client, sample_user, sample_service):
             'user.set_permissions',
             user_id=str(sample_user.id),
             service_id=str(sample_service.id)),
-        headers=[('Content-Type', 'application/json'), create_authorization_header()],
+        headers=[('Content-Type', 'application/json'), create_service_authorization_header()],
         data=data)
 
     assert response.status_code == 204
@@ -585,7 +632,7 @@ def test_send_user_reset_password_should_send_reset_password_link(client,
                                                                   password_reset_email_template):
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     data = json.dumps({'email': sample_user.email_address})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     notify_service = password_reset_email_template.service
     resp = client.post(
         url_for('user.send_user_reset_password'),
@@ -604,7 +651,7 @@ def test_send_user_reset_password_reset_password_link_contains_redirect_link_if_
 ):
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     data = json.dumps({'email': sample_user.email_address, "next": "blob"})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     response = client.post(
         url_for('user.send_user_reset_password'),
         data=data,
@@ -619,7 +666,7 @@ def test_send_user_reset_password_reset_password_link_contains_redirect_link_if_
 def test_send_user_reset_password_should_return_400_when_email_is_missing(client, mocker):
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     data = json.dumps({})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     resp = client.post(
         url_for('user.send_user_reset_password'),
@@ -635,7 +682,7 @@ def test_send_user_reset_password_should_return_400_when_user_doesnot_exist(clie
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     bad_email_address = 'bad@email.gov.uk'
     data = json.dumps({'email': bad_email_address})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     resp = client.post(
         url_for('user.send_user_reset_password'),
@@ -651,7 +698,7 @@ def test_send_user_reset_password_should_return_400_when_data_is_not_email_addre
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     bad_email_address = 'bad.email.gov.uk'
     data = json.dumps({'email': bad_email_address})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     resp = client.post(
         url_for('user.send_user_reset_password'),
@@ -665,7 +712,7 @@ def test_send_user_reset_password_should_return_400_when_data_is_not_email_addre
 
 def test_send_already_registered_email(client, sample_user, already_registered_template, mocker):
     data = json.dumps({'email': sample_user.email_address})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     notify_service = already_registered_template.service
 
@@ -682,7 +729,7 @@ def test_send_already_registered_email(client, sample_user, already_registered_t
 
 def test_send_already_registered_email_returns_400_when_data_is_missing(client, sample_user):
     data = json.dumps({})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     resp = client.post(
         url_for('user.send_already_registered_email', user_id=str(sample_user.id)),
@@ -696,7 +743,7 @@ def test_send_user_confirm_new_email_returns_204(client, sample_user, change_ema
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     new_email = 'new_address@dig.gov.uk'
     data = json.dumps({'email': new_email})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     notify_service = change_email_confirmation_template.service
 
     resp = client.post(url_for('user.send_user_confirm_new_email', user_id=str(sample_user.id)),
@@ -713,7 +760,7 @@ def test_send_user_confirm_new_email_returns_204(client, sample_user, change_ema
 def test_send_user_confirm_new_email_returns_400_when_email_missing(client, sample_user, mocker):
     mocked = mocker.patch('app.celery.provider_tasks.deliver_email.apply_async')
     data = json.dumps({})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     resp = client.post(url_for('user.send_user_confirm_new_email', user_id=str(sample_user.id)),
                        data=data,
                        headers=[('Content-Type', 'application/json'), auth_header])
@@ -722,35 +769,23 @@ def test_send_user_confirm_new_email_returns_400_when_email_missing(client, samp
     mocked.assert_not_called()
 
 
-@pytest.mark.parametrize('data,email_access_validated_at', [
-    ({'_password': '1234567890'}, datetime(2020, 2, 13, 12, 0)),
-    ({
-        '_password': '1234567890',
-        'validated_email_access': True,
-    }, datetime(2020, 2, 14, 12, 0)),
-    ({
-        '_password': '1234567890',
-        'validated_email_access': False,
-    }, datetime(2020, 2, 13, 12, 0))
-])
 @freeze_time('2020-02-14T12:00:00')
-def test_update_user_password_saves_correctly(client, sample_service, data, email_access_validated_at):
+def test_update_user_password_saves_correctly(client, sample_service):
     sample_user = sample_service.users[0]
-    sample_user.email_access_validated_at = datetime(2020, 2, 13, 12, 0)
     new_password = '1234567890'
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
+    data = {'_password': '1234567890'}
     resp = client.post(
         url_for('user.update_password', user_id=sample_user.id),
         data=json.dumps(data),
         headers=headers)
     assert resp.status_code == 200
-    assert sample_user.email_access_validated_at == email_access_validated_at
 
     json_resp = json.loads(resp.get_data(as_text=True))
     assert json_resp['data']['password_changed_at'] is not None
     data = {'password': new_password}
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
     headers = [('Content-Type', 'application/json'), auth_header]
     resp = client.post(
         url_for('user.verify_user_password', user_id=str(sample_user.id)),
@@ -1002,7 +1037,7 @@ def test_find_users_by_email_finds_user_by_partial_email(notify_db, client):
     create_user(email='findel.mestro@foo.com')
     create_user(email='me.ignorra@foo.com')
     data = json.dumps({"email": "findel"})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     response = client.post(
         url_for("user.find_users_by_email"),
@@ -1020,7 +1055,7 @@ def test_find_users_by_email_finds_user_by_full_email(notify_db, client):
     create_user(email='findel.mestro@foo.com')
     create_user(email='me.ignorra@foo.com')
     data = json.dumps({"email": "findel.mestro@foo.com"})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     response = client.post(
         url_for("user.find_users_by_email"),
@@ -1038,7 +1073,7 @@ def test_find_users_by_email_handles_no_results(notify_db, client):
     create_user(email='findel.mestro@foo.com')
     create_user(email='me.ignorra@foo.com')
     data = json.dumps({"email": "rogue"})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     response = client.post(
         url_for("user.find_users_by_email"),
@@ -1054,7 +1089,7 @@ def test_find_users_by_email_handles_no_results(notify_db, client):
 def test_search_for_users_by_email_handles_incorrect_data_format(notify_db, client):
     create_user(email='findel.mestro@foo.com')
     data = json.dumps({"email": 1})
-    auth_header = create_authorization_header()
+    auth_header = create_service_authorization_header()
 
     response = client.post(
         url_for("user.find_users_by_email"),
@@ -1064,3 +1099,74 @@ def test_search_for_users_by_email_handles_incorrect_data_format(notify_db, clie
 
     assert response.status_code == 400
     assert json.loads(response.get_data(as_text=True))['message'] == {'email': ['Not a valid string.']}
+
+
+@freeze_time('2020-01-01 11:00')
+def test_complete_login_after_webauthn_authentication_attempt_resets_login_if_successful(admin_request, sample_user):
+    sample_user.failed_login_count = 1
+
+    assert sample_user.current_session_id is None
+    assert sample_user.logged_in_at is None
+
+    admin_request.post(
+        'user.complete_login_after_webauthn_authentication_attempt',
+        user_id=sample_user.id,
+        _data={'successful': True},
+        _expected_status=204
+    )
+
+    assert sample_user.current_session_id is not None
+    assert sample_user.failed_login_count == 0
+    assert sample_user.logged_in_at == datetime(2020, 1, 1, 11, 0)
+
+
+def test_complete_login_after_webauthn_authentication_attempt_returns_204_when_not_successful(
+    admin_request,
+    sample_user
+):
+    # when unsuccessful this endpoint is used to bump the failed count. the endpoint still worked
+    # properly so should return 204 (no content).
+    sample_user.failed_login_count = 1
+
+    assert sample_user.current_session_id is None
+    assert sample_user.logged_in_at is None
+
+    admin_request.post(
+        'user.complete_login_after_webauthn_authentication_attempt',
+        user_id=sample_user.id,
+        _data={'successful': False},
+        _expected_status=204
+    )
+
+    assert sample_user.current_session_id is None
+    assert sample_user.failed_login_count == 2
+    assert sample_user.logged_in_at is None
+
+
+def test_complete_login_after_webauthn_authentication_attempt_raises_403_if_max_login_count_exceeded(
+    admin_request,
+    sample_user
+):
+    # when unsuccessful this endpoint is used to bump the failed count. the endpoint still worked
+    # properly so should return 204 (no content).
+    sample_user.failed_login_count = 10
+
+    admin_request.post(
+        'user.verify_webauthn_login_for_user',
+        user_id=sample_user.id,
+        _data={'successful': True},
+        _expected_status=403
+    )
+
+    assert sample_user.current_session_id is None
+    assert sample_user.failed_login_count == 10
+    assert sample_user.logged_in_at is None
+
+
+def test_complete_login_after_webauthn_authentication_attempt_raises_400_if_schema_invalid(admin_request):
+    admin_request.post(
+        'user.complete_login_after_webauthn_authentication_attempt',
+        user_id=uuid.uuid4(),
+        _data={'successful': 'True'},
+        _expected_status=400
+    )

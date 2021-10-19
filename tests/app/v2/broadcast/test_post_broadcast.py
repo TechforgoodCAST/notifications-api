@@ -1,17 +1,21 @@
-import pytest
-
-from flask import json
-from tests import create_authorization_header
 from unittest.mock import ANY
+
+import pytest
+from flask import json
+
+from app.dao.broadcast_message_dao import (
+    dao_get_broadcast_message_by_id_and_service_id,
+)
+from tests import create_service_authorization_header
+
 from . import sample_cap_xml_documents
-from app.dao.broadcast_message_dao import dao_get_broadcast_message_by_id_and_service_id
 
 
 def test_broadcast_for_service_without_permission_returns_400(
     client,
     sample_service,
 ):
-    auth_header = create_authorization_header(service_id=sample_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_service.id)
     response = client.post(
         path='/v2/broadcast',
         data='',
@@ -28,7 +32,7 @@ def test_valid_post_broadcast_returns_201(
     client,
     sample_broadcast_service,
 ):
-    auth_header = create_authorization_header(service_id=sample_broadcast_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_broadcast_service.id)
 
     response = client.post(
         path='/v2/broadcast',
@@ -67,7 +71,7 @@ def test_valid_post_cap_xml_broadcast_returns_201(
     client,
     sample_broadcast_service,
 ):
-    auth_header = create_authorization_header(service_id=sample_broadcast_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_broadcast_service.id)
 
     response = client.post(
         path='/v2/broadcast',
@@ -117,7 +121,7 @@ def test_valid_post_cap_xml_broadcast_sets_stubbed_to_true_for_training_mode_ser
     training_mode_service
 ):
     sample_broadcast_service.restricted = training_mode_service
-    auth_header = create_authorization_header(service_id=sample_broadcast_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_broadcast_service.id)
 
     response = client.post(
         path='/v2/broadcast',
@@ -143,7 +147,7 @@ def test_invalid_post_cap_xml_broadcast_returns_400(
     sample_broadcast_service,
     xml_document,
 ):
-    auth_header = create_authorization_header(service_id=sample_broadcast_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_broadcast_service.id)
 
     response = client.post(
         path='/v2/broadcast',
@@ -175,7 +179,7 @@ def test_unsupported_message_types_400(
     xml_document,
     expected_error_message,
 ):
-    auth_header = create_authorization_header(service_id=sample_broadcast_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_broadcast_service.id)
 
     response = client.post(
         path='/v2/broadcast',

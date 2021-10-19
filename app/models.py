@@ -1,49 +1,48 @@
+import datetime
 import itertools
 import uuid
-import datetime
-from flask import url_for, current_app
 
-from sqlalchemy.ext.declarative import declared_attr
-from sqlalchemy.ext.associationproxy import association_proxy
-from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.schema import Sequence
-from sqlalchemy.dialects.postgresql import (
-    UUID,
-    JSON,
-    JSONB,
-)
-from sqlalchemy.orm.collections import attribute_mapped_collection
-from sqlalchemy import UniqueConstraint, CheckConstraint, Index, String, and_, func
+from flask import current_app, url_for
 from notifications_utils.columns import Columns
+from notifications_utils.letter_timings import get_letter_timings
 from notifications_utils.recipients import (
+    InvalidEmailError,
+    InvalidPhoneError,
+    try_validate_and_format_phone_number,
     validate_email_address,
     validate_phone_number,
-    try_validate_and_format_phone_number,
-    InvalidPhoneError,
-    InvalidEmailError
 )
-from notifications_utils.letter_timings import get_letter_timings
 from notifications_utils.template import (
+    BroadcastMessageTemplate,
+    LetterPrintTemplate,
     PlainTextEmailTemplate,
     SMSMessageTemplate,
-    LetterPrintTemplate,
-    BroadcastMessageTemplate,
 )
 from notifications_utils.timezones import convert_utc_to_bst
-
-from app.hashing import (
-    hashpw,
-    check_hash
+from sqlalchemy import (
+    CheckConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    and_,
+    func,
 )
+from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID
+from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm.collections import attribute_mapped_collection
+from sqlalchemy.schema import Sequence
+
 from app import db, encryption
+from app.hashing import check_hash, hashpw
+from app.history_meta import Versioned
 from app.utils import (
     DATETIME_FORMAT,
     DATETIME_FORMAT_NO_TIMEZONE,
     get_dt_string_or_none,
     get_uuid_string_or_none,
 )
-
-from app.history_meta import Versioned
 
 SMS_TYPE = 'sms'
 EMAIL_TYPE = 'email'
@@ -62,7 +61,8 @@ TEMPLATE_PROCESS_TYPE = [NORMAL, PRIORITY]
 
 SMS_AUTH_TYPE = 'sms_auth'
 EMAIL_AUTH_TYPE = 'email_auth'
-USER_AUTH_TYPE = [SMS_AUTH_TYPE, EMAIL_AUTH_TYPE]
+WEBAUTHN_AUTH_TYPE = 'webauthn_auth'
+USER_AUTH_TYPES = [SMS_AUTH_TYPE, EMAIL_AUTH_TYPE, WEBAUTHN_AUTH_TYPE]
 
 DELIVERY_STATUS_CALLBACK_TYPE = 'delivery_status'
 COMPLAINT_CALLBACK_TYPE = 'complaint'
@@ -125,7 +125,7 @@ class User(db.Model):
     )
 
     # either email auth or a mobile number must be provided
-    CheckConstraint("auth_type = 'email_auth' or mobile_number is not null")
+    CheckConstraint("auth_type in ('email_auth', 'webauthn_auth') or mobile_number is not null")
 
     services = db.relationship(
         'Service',
@@ -139,6 +139,19 @@ class User(db.Model):
     @property
     def password(self):
         raise AttributeError("Password not readable")
+
+    @property
+    def can_use_webauthn(self):
+        if self.platform_admin:
+            return True
+
+        if self.auth_type == 'webauthn_auth':
+            return True
+
+        return any(
+            str(service.id) == current_app.config['NOTIFY_SERVICE_ID']
+            for service in self.services
+        )
 
     @password.setter
     def password(self, password):
@@ -179,6 +192,7 @@ class User(db.Model):
             'permissions': self.get_permissions(),
             'platform_admin': self.platform_admin,
             'services': [x.id for x in self.services if x.active],
+            'can_use_webauthn': self.can_use_webauthn,
             'state': self.state,
         }
 
@@ -199,8 +213,6 @@ class ServiceUser(db.Model):
     __table_args__ = (
         UniqueConstraint('user_id', 'service_id', name='uix_user_to_service'),
     )
-
-    user = db.relationship('User')
 
 
 user_to_organisation = db.Table(
@@ -674,7 +686,6 @@ class ServicePermission(db.Model):
                            primary_key=True, index=True, nullable=False)
     permission = db.Column(db.String(255), db.ForeignKey('service_permission_types.name'),
                            index=True, primary_key=True, nullable=False)
-    service = db.relationship("Service")
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     service_permission_types = db.relationship(
@@ -1414,16 +1425,16 @@ class Notification(db.Model):
     job_id = db.Column(UUID(as_uuid=True), db.ForeignKey('jobs.id'), index=True, unique=False)
     job = db.relationship('Job', backref=db.backref('notifications', lazy='dynamic'))
     job_row_number = db.Column(db.Integer, nullable=True)
-    service_id = db.Column(UUID(as_uuid=True), db.ForeignKey('services.id'), index=True, unique=False)
+    service_id = db.Column(UUID(as_uuid=True), db.ForeignKey('services.id'), unique=False)
     service = db.relationship('Service')
     template_id = db.Column(UUID(as_uuid=True), index=True, unique=False)
     template_version = db.Column(db.Integer, nullable=False)
     template = db.relationship('TemplateHistory')
-    api_key_id = db.Column(UUID(as_uuid=True), db.ForeignKey('api_keys.id'), index=True, unique=False)
+    api_key_id = db.Column(UUID(as_uuid=True), db.ForeignKey('api_keys.id'), unique=False)
     api_key = db.relationship('ApiKey')
-    key_type = db.Column(db.String, db.ForeignKey('key_types.name'), index=True, unique=False, nullable=False)
+    key_type = db.Column(db.String, db.ForeignKey('key_types.name'), unique=False, nullable=False)
     billable_units = db.Column(db.Integer, nullable=False, default=0)
-    notification_type = db.Column(notification_types, index=True, nullable=False)
+    notification_type = db.Column(notification_types, nullable=False)
     created_at = db.Column(
         db.DateTime,
         index=True,
@@ -1443,9 +1454,8 @@ class Notification(db.Model):
         onupdate=datetime.datetime.utcnow)
     status = db.Column(
         'notification_status',
-        db.String,
+        db.Text,
         db.ForeignKey('notification_status_types.name'),
-        index=True,
         nullable=True,
         default='created',
         key='status'  # http://docs.sqlalchemy.org/en/latest/core/metadata.html#sqlalchemy.schema.Column
@@ -1458,7 +1468,7 @@ class Notification(db.Model):
 
     international = db.Column(db.Boolean, nullable=False, default=False)
     phone_prefix = db.Column(db.String, nullable=True)
-    rate_multiplier = db.Column(db.Float(asdecimal=False), nullable=True)
+    rate_multiplier = db.Column(db.Numeric(asdecimal=False), nullable=True)
 
     created_by = db.relationship('User')
     created_by_id = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=True)
@@ -1474,7 +1484,21 @@ class Notification(db.Model):
             ['template_id', 'template_version'],
             ['templates_history.id', 'templates_history.version'],
         ),
-        {}
+        UniqueConstraint('job_id', 'job_row_number', name='uq_notifications_job_row_number'),
+        Index(
+            'ix_notifications_notification_type_composite',
+            'notification_type',
+            'status',
+            'created_at'
+        ),
+        Index('ix_notifications_service_created_at', 'service_id', 'created_at'),
+        Index(
+            "ix_notifications_service_id_composite",
+            'service_id',
+            'notification_type',
+            'status',
+            'created_at'
+        )
     )
 
     @property
@@ -1690,24 +1714,23 @@ class NotificationHistory(db.Model, HistoryModel):
     job_id = db.Column(UUID(as_uuid=True), db.ForeignKey('jobs.id'), index=True, unique=False)
     job = db.relationship('Job')
     job_row_number = db.Column(db.Integer, nullable=True)
-    service_id = db.Column(UUID(as_uuid=True), db.ForeignKey('services.id'), index=True, unique=False)
+    service_id = db.Column(UUID(as_uuid=True), db.ForeignKey('services.id'), unique=False)
     service = db.relationship('Service')
-    template_id = db.Column(UUID(as_uuid=True), index=True, unique=False)
+    template_id = db.Column(UUID(as_uuid=True), unique=False)
     template_version = db.Column(db.Integer, nullable=False)
-    api_key_id = db.Column(UUID(as_uuid=True), db.ForeignKey('api_keys.id'), index=True, unique=False)
+    api_key_id = db.Column(UUID(as_uuid=True), db.ForeignKey('api_keys.id'), unique=False)
     api_key = db.relationship('ApiKey')
-    key_type = db.Column(db.String, db.ForeignKey('key_types.name'), index=True, unique=False, nullable=False)
+    key_type = db.Column(db.String, db.ForeignKey('key_types.name'), unique=False, nullable=False)
     billable_units = db.Column(db.Integer, nullable=False, default=0)
-    notification_type = db.Column(notification_types, index=True, nullable=False)
-    created_at = db.Column(db.DateTime, index=True, unique=False, nullable=False)
+    notification_type = db.Column(notification_types, nullable=False)
+    created_at = db.Column(db.DateTime, unique=False, nullable=False)
     sent_at = db.Column(db.DateTime, index=False, unique=False, nullable=True)
     sent_by = db.Column(db.String, nullable=True)
     updated_at = db.Column(db.DateTime, index=False, unique=False, nullable=True, onupdate=datetime.datetime.utcnow)
     status = db.Column(
         'notification_status',
-        db.String,
+        db.Text,
         db.ForeignKey('notification_status_types.name'),
-        index=True,
         nullable=True,
         default='created',
         key='status'  # http://docs.sqlalchemy.org/en/latest/core/metadata.html#sqlalchemy.schema.Column
@@ -1715,9 +1738,9 @@ class NotificationHistory(db.Model, HistoryModel):
     reference = db.Column(db.String, nullable=True, index=True)
     client_reference = db.Column(db.String, nullable=True)
 
-    international = db.Column(db.Boolean, nullable=False, default=False)
+    international = db.Column(db.Boolean, nullable=True, default=False)
     phone_prefix = db.Column(db.String, nullable=True)
-    rate_multiplier = db.Column(db.Float(asdecimal=False), nullable=True)
+    rate_multiplier = db.Column(db.Numeric(asdecimal=False), nullable=True)
 
     created_by_id = db.Column(UUID(as_uuid=True), nullable=True)
 
@@ -1730,7 +1753,13 @@ class NotificationHistory(db.Model, HistoryModel):
             ['template_id', 'template_version'],
             ['templates_history.id', 'templates_history.version'],
         ),
-        {}
+        Index(
+            'ix_notification_history_service_id_composite',
+            'service_id',
+            'key_type',
+            'notification_type',
+            'created_at'
+        )
     )
 
     @classmethod
@@ -1742,16 +1771,6 @@ class NotificationHistory(db.Model, HistoryModel):
     def update_from_original(self, original):
         super().update_from_original(original)
         self.status = original.status
-
-
-class ScheduledNotification(db.Model):
-    __tablename__ = 'scheduled_notifications'
-
-    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    notification_id = db.Column(UUID(as_uuid=True), db.ForeignKey('notifications.id'), index=True, nullable=False)
-    notification = db.relationship('Notification', uselist=False)
-    scheduled_for = db.Column(db.DateTime, index=False, nullable=False)
-    pending = db.Column(db.Boolean, nullable=False, default=True)
 
 
 INVITE_PENDING = 'pending'
@@ -2066,6 +2085,16 @@ class FactNotificationStatus(db.Model):
     key_type = db.Column(db.Text, primary_key=True, nullable=False)
     notification_status = db.Column(db.Text, primary_key=True, nullable=False)
     notification_count = db.Column(db.Integer(), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=True, onupdate=datetime.datetime.utcnow)
+
+
+class FactProcessingTime(db.Model):
+    __tablename__ = "ft_processing_time"
+
+    bst_date = db.Column(db.Date, index=True, primary_key=True, nullable=False)
+    messages_total = db.Column(db.Integer(), nullable=False)
+    messages_within_10_secs = db.Column(db.Integer(), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True, onupdate=datetime.datetime.utcnow)
 
@@ -2429,7 +2458,9 @@ class BroadcastEvent(db.Model):
         Return the full provider_message object rather than just an identifier, since the different providers expect
         reference to contain different things - let the cbc_proxy work out what information is relevant.
         """
-        from app.dao.broadcast_message_dao import get_earlier_events_for_broadcast_event
+        from app.dao.broadcast_message_dao import (
+            get_earlier_events_for_broadcast_event,
+        )
         earlier_events = [
             event for event in get_earlier_events_for_broadcast_event(self.id)
         ]
@@ -2583,3 +2614,36 @@ class ServiceBroadcastProviderRestriction(db.Model):
     provider = db.Column(db.String, nullable=False)
 
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+
+class WebauthnCredential(db.Model):
+    """
+    A table that stores data for registered webauthn credentials.
+    """
+    __tablename__ = "webauthn_credential"
+
+    id = db.Column(UUID(as_uuid=True), primary_key=True, nullable=False, default=uuid.uuid4)
+
+    user_id = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=False)
+    user = db.relationship(User, backref=db.backref("webauthn_credentials"))
+
+    name = db.Column(db.String, nullable=False)
+
+    # base64 encoded CBOR. used for logging in. https://w3c.github.io/webauthn/#sctn-attested-credential-data
+    credential_data = db.Column(db.String, nullable=False)
+
+    # base64 encoded CBOR. used for auditing. https://www.w3.org/TR/webauthn-2/#authenticatorattestationresponse
+    registration_response = db.Column(db.String, nullable=False)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=True, onupdate=datetime.datetime.utcnow)
+
+    def serialize(self):
+        return {
+            'id': str(self.id),
+            'user_id': str(self.user_id),
+            'name': self.name,
+            'credential_data': self.credential_data,
+            'created_at': self.created_at.strftime(DATETIME_FORMAT),
+            'updated_at': get_dt_string_or_none(self.updated_at),
+        }

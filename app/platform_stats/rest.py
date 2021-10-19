@@ -4,15 +4,19 @@ from flask import Blueprint, jsonify, request
 
 from app.dao.date_util import get_financial_year_for_datetime
 from app.dao.fact_billing_dao import (
-    fetch_sms_billing_for_all_services, fetch_letter_costs_for_all_services,
-    fetch_letter_line_items_for_all_services
+    fetch_billing_details_for_all_services,
+    fetch_letter_costs_for_all_services,
+    fetch_letter_line_items_for_all_services,
+    fetch_sms_billing_for_all_services,
 )
-from app.dao.fact_notification_status_dao import fetch_notification_status_totals_for_all_services
-from app.errors import register_errors, InvalidRequest
+from app.dao.fact_notification_status_dao import (
+    fetch_notification_status_totals_for_all_services,
+)
+from app.errors import InvalidRequest, register_errors
 from app.models import UK_POSTAGE_TYPES
 from app.platform_stats.platform_stats_schema import platform_stats_request
-from app.service.statistics import format_admin_stats
 from app.schema_validation import validate
+from app.service.statistics import format_admin_stats
 from app.utils import get_london_midnight_in_utc
 
 platform_stats_blueprint = Blueprint('platform_stats', __name__)
@@ -55,7 +59,8 @@ def validate_date_range_is_within_a_financial_year(start_date, end_date):
 
 
 @platform_stats_blueprint.route('usage-for-all-services')
-def get_usage_for_all_services():
+@platform_stats_blueprint.route('data-for-billing-report')
+def get_data_for_billing_report():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
 
@@ -72,17 +77,18 @@ def get_usage_for_all_services():
     ]
     combined = {}
     for s in sms_costs:
-        entry = {
-            "organisation_id": str(s.organisation_id) if s.organisation_id else "",
-            "organisation_name": s.organisation_name or "",
-            "service_id": str(s.service_id),
-            "service_name": s.service_name,
-            "sms_cost": float(s.sms_cost),
-            "sms_fragments": s.chargeable_billable_sms,
-            "letter_cost": 0,
-            "letter_breakdown": ""
-        }
-        combined[s.service_id] = entry
+        if float(s.sms_cost) > 0:
+            entry = {
+                "organisation_id": str(s.organisation_id) if s.organisation_id else "",
+                "organisation_name": s.organisation_name or "",
+                "service_id": str(s.service_id),
+                "service_name": s.service_name,
+                "sms_cost": float(s.sms_cost),
+                "sms_fragments": s.chargeable_billable_sms,
+                "letter_cost": 0,
+                "letter_breakdown": ""
+            }
+            combined[s.service_id] = entry
 
     for letter_cost in letter_costs:
         if letter_cost.service_id in combined:
@@ -102,12 +108,24 @@ def get_usage_for_all_services():
     for service_id, breakdown in lb_by_service:
         combined[service_id]['letter_breakdown'] += (breakdown + '\n')
 
+    billing_details = fetch_billing_details_for_all_services()
+    for service in billing_details:
+        if service.service_id in combined:
+            combined[service.service_id].update({
+                    'purchase_order_number': service.purchase_order_number,
+                    'contact_names': service.billing_contact_names,
+                    'contact_email_addresses': service.billing_contact_email_addresses,
+                    'billing_reference': service.billing_reference
+                })
+
     # sorting first by name == '' means that blank orgs will be sorted last.
-    return jsonify(sorted(combined.values(), key=lambda x: (
+
+    result = sorted(combined.values(), key=lambda x: (
         x['organisation_name'] == '',
         x['organisation_name'],
         x['service_name']
-    )))
+    ))
+    return jsonify(result)
 
 
 def postage_description(postage):

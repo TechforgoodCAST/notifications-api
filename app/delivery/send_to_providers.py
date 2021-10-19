@@ -1,36 +1,42 @@
 import json
 import random
-from urllib import parse
 from datetime import datetime, timedelta
+from urllib import parse
+
 from cachetools import TTLCache, cached
 from flask import current_app
 from notifications_utils.recipients import (
+    validate_and_format_email_address,
     validate_and_format_phone_number,
-    validate_and_format_email_address
 )
-from notifications_utils.template import HTMLEmailTemplate, PlainTextEmailTemplate, SMSMessageTemplate
+from notifications_utils.template import (
+    HTMLEmailTemplate,
+    PlainTextEmailTemplate,
+    SMSMessageTemplate,
+)
 
-from app import notification_provider_clients, statsd_client, create_uuid
-from app.dao.notifications_dao import (
-    dao_update_notification
+from app import create_uuid, notification_provider_clients, statsd_client
+from app.celery.research_mode_tasks import (
+    send_email_response,
+    send_sms_response,
 )
+from app.dao.notifications_dao import dao_update_notification
 from app.dao.provider_details_dao import (
+    dao_reduce_sms_provider_priority,
     get_provider_details_by_notification_type,
-    dao_reduce_sms_provider_priority
 )
-from app.celery.research_mode_tasks import send_sms_response, send_email_response
 from app.dao.templates_dao import dao_get_template_by_id
 from app.exceptions import NotificationTechnicalFailureException
 from app.models import (
-    SMS_TYPE,
-    KEY_TYPE_TEST,
     BRANDING_BOTH,
     BRANDING_ORG_BANNER,
     EMAIL_TYPE,
-    NOTIFICATION_TECHNICAL_FAILURE,
-    NOTIFICATION_SENT,
+    KEY_TYPE_TEST,
     NOTIFICATION_SENDING,
-    NOTIFICATION_STATUS_TYPES_COMPLETED
+    NOTIFICATION_SENT,
+    NOTIFICATION_STATUS_TYPES_COMPLETED,
+    NOTIFICATION_TECHNICAL_FAILURE,
+    SMS_TYPE,
 )
 
 
@@ -83,7 +89,7 @@ def send_sms_to_provider(notification):
             statsd_client.timing("sms.test-key.total-time", delta_seconds)
         else:
             statsd_client.timing("sms.live-key.total-time", delta_seconds)
-            if str(service.id) in current_app.config.get('HIGH_VOLUME_SERVICE'):
+            if service.high_volume:
                 statsd_client.timing("sms.live-key.high-volume.total-time", delta_seconds)
             else:
                 statsd_client.timing("sms.live-key.not-high-volume.total-time", delta_seconds)
@@ -137,7 +143,7 @@ def send_email_to_provider(notification):
             statsd_client.timing("email.test-key.total-time", delta_seconds)
         else:
             statsd_client.timing("email.live-key.total-time", delta_seconds)
-            if str(service.id) in current_app.config.get('HIGH_VOLUME_SERVICE'):
+            if service.high_volume:
                 statsd_client.timing("email.live-key.high-volume.total-time", delta_seconds)
             else:
                 statsd_client.timing("email.live-key.not-high-volume.total-time", delta_seconds)
@@ -166,7 +172,12 @@ def provider_to_use(notification_type, international=False):
         )
         raise Exception("No active {} providers".format(notification_type))
 
-    chosen_provider = random.choices(active_providers, weights=[p.priority for p in active_providers])[0]
+    if len(active_providers) == 1:
+        weights = [100]
+    else:
+        weights = [p.priority for p in active_providers]
+
+    chosen_provider = random.choices(active_providers, weights=weights)[0]
 
     return notification_provider_clients.get_client_by_name_and_type(chosen_provider.identifier, notification_type)
 

@@ -1,34 +1,33 @@
-from datetime import datetime, timedelta, time, date
+from datetime import date, datetime, time, timedelta
 
 from flask import current_app
 from notifications_utils.timezones import convert_bst_to_utc, convert_utc_to_bst
+from sqlalchemy import Date, Integer, and_, desc, func
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import func, desc, Date, Integer, and_
 from sqlalchemy.sql.expression import case, literal
 
 from app import db
 from app.dao.date_util import (
     get_financial_year,
-    get_financial_year_for_datetime
+    get_financial_year_for_datetime,
 )
 from app.dao.organisation_dao import dao_get_organisation_live_services
-
 from app.models import (
-    FactBilling,
-    Service,
+    EMAIL_TYPE,
+    INTERNATIONAL_POSTAGE_TYPES,
     KEY_TYPE_TEST,
     LETTER_TYPE,
-    SMS_TYPE,
-    Rate,
-    LetterRate,
-    NotificationHistory,
-    EMAIL_TYPE,
+    NOTIFICATION_STATUS_TYPES_BILLABLE_FOR_LETTERS,
     NOTIFICATION_STATUS_TYPES_BILLABLE_SMS,
     NOTIFICATION_STATUS_TYPES_SENT_EMAILS,
-    NOTIFICATION_STATUS_TYPES_BILLABLE_FOR_LETTERS,
+    SMS_TYPE,
     AnnualBilling,
+    FactBilling,
+    LetterRate,
+    NotificationHistory,
     Organisation,
-    INTERNATIONAL_POSTAGE_TYPES,
+    Rate,
+    Service,
 )
 from app.utils import get_london_midnight_in_utc, get_notification_table_to_use
 
@@ -151,9 +150,12 @@ def fetch_letter_line_items_for_all_services(start_date, end_date):
         [(FactBilling.postage.in_(INTERNATIONAL_POSTAGE_TYPES), "international")], else_=FactBilling.postage
     ).label("postage")
 
-    postage_order = case(((formatted_postage == "second", 1),
-                          (formatted_postage == "first", 2),
-                          (formatted_postage == "international", 3)))
+    postage_order = case(
+            (formatted_postage == "second", 1),
+            (formatted_postage == "first", 2),
+            (formatted_postage == "international", 3),
+            else_=0  # assumes never get 0 as a result
+    )
 
     query = db.session.query(
         Organisation.name.label("organisation_name"),
@@ -456,6 +458,8 @@ def get_rate(
     if notification_type == LETTER_TYPE:
         if letter_page_count == 0:
             return 0
+        # if crown is not set default to true, this is okay because the rates are the same for both crown and non-crown.
+        crown = crown or True
         return next(
             r.rate
             for r in letter_rates if (
@@ -684,3 +688,20 @@ def fetch_usage_year_for_organisation(organisation_id, year):
         service_with_usage[str(email_usage.service_id)]['emails_sent'] = email_usage.emails_sent
 
     return service_with_usage
+
+
+def fetch_billing_details_for_all_services():
+    billing_details = db.session.query(
+        Service.id.label('service_id'),
+        func.coalesce(Service.purchase_order_number, Organisation.purchase_order_number).label('purchase_order_number'),
+        func.coalesce(Service.billing_contact_names, Organisation.billing_contact_names).label('billing_contact_names'),
+        func.coalesce(
+            Service.billing_contact_email_addresses,
+            Organisation.billing_contact_email_addresses
+        ).label('billing_contact_email_addresses'),
+        func.coalesce(Service.billing_reference, Organisation.billing_reference).label('billing_reference'),
+    ).outerjoin(
+        Service.organisation
+    ).all()
+
+    return billing_details

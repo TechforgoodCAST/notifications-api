@@ -6,19 +6,21 @@ import requests_mock
 from freezegun import freeze_time
 
 from app import encryption
-from app.celery.service_callback_tasks import send_delivery_status_to_service, send_complaint_to_service
+from app.celery.service_callback_tasks import (
+    send_complaint_to_service,
+    send_delivery_status_to_service,
+)
 from app.utils import DATETIME_FORMAT
 from tests.app.db import (
     create_complaint,
     create_notification,
-    create_service_callback_api,
     create_service,
-    create_template
+    create_service_callback_api,
+    create_template,
 )
 
 
-@pytest.mark.parametrize("notification_type",
-                         ["email", "letter", "sms"])
+@pytest.mark.parametrize("notification_type", ["email", "sms"])
 def test_send_delivery_status_to_service_post_https_request_to_service_with_encrypted_data(
         notify_db_session, notification_type):
 
@@ -46,7 +48,9 @@ def test_send_delivery_status_to_service_post_https_request_to_service_with_encr
         "created_at": datestr.strftime(DATETIME_FORMAT),
         "completed_at": datestr.strftime(DATETIME_FORMAT),
         "sent_at": datestr.strftime(DATETIME_FORMAT),
-        "notification_type": notification_type
+        "notification_type": notification_type,
+        "template_id": str(template.id),
+        "template_version": 1
     }
 
     assert request_mock.call_count == 1
@@ -87,10 +91,13 @@ def test_send_complaint_to_service_posts_https_request_to_service_with_encrypted
         assert request_mock.request_history[0].headers["Authorization"] == "Bearer {}".format(callback_api.bearer_token)
 
 
-@pytest.mark.parametrize("notification_type",
-                         ["email", "letter", "sms"])
-def test__send_data_to_service_callback_api_retries_if_request_returns_500_with_encrypted_data(
-        notify_db_session, mocker, notification_type
+@pytest.mark.parametrize("notification_type", ["email", "sms"])
+@pytest.mark.parametrize('status_code', [429, 500, 503])
+def test__send_data_to_service_callback_api_retries_if_request_returns_error_code_with_encrypted_data(
+        notify_db_session,
+        mocker,
+        notification_type,
+        status_code
 ):
     callback_api, template = _set_up_test_data(notification_type, "delivery_status")
     datestr = datetime(2017, 6, 20)
@@ -105,7 +112,7 @@ def test__send_data_to_service_callback_api_retries_if_request_returns_500_with_
     with requests_mock.Mocker() as request_mock:
         request_mock.post(callback_api.url,
                           json={},
-                          status_code=500)
+                          status_code=status_code)
         send_delivery_status_to_service(notification.id, encrypted_status_update=encrypted_data)
 
     assert mocked.call_count == 1
@@ -182,6 +189,8 @@ def _set_up_data_for_status_update(callback_api, notification):
         "notification_type": notification.notification_type,
         "service_callback_api_url": callback_api.url,
         "service_callback_api_bearer_token": callback_api.bearer_token,
+        "template_id": str(notification.template_id),
+        "template_version": notification.template_version,
     }
     encrypted_status_update = encryption.encrypt(data)
     return encrypted_status_update

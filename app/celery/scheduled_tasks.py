@@ -1,57 +1,59 @@
-import uuid
-
-from datetime import (
-    datetime,
-    timedelta
-)
+from datetime import datetime, timedelta
 
 from flask import current_app
-from notifications_utils.statsd_decorators import statsd
-from sqlalchemy import and_
+from sqlalchemy import between
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import cbc_proxy_client, notify_celery, zendesk_client
-from app.celery.tasks import (
-    process_job,
-    get_recipient_csv_and_template_and_sender_id,
-    process_row,
-    process_incomplete_jobs)
-from app.celery.letters_pdf_tasks import get_pdf_for_templated_letter
+from app import notify_celery, zendesk_client
 from app.celery.broadcast_message_tasks import trigger_link_test
+from app.celery.letters_pdf_tasks import get_pdf_for_templated_letter
+from app.celery.tasks import (
+    get_recipient_csv_and_template_and_sender_id,
+    process_incomplete_jobs,
+    process_job,
+    process_row,
+)
 from app.config import QueueNames
-from app.dao.invited_org_user_dao import delete_org_invitations_created_more_than_two_days_ago
-from app.dao.invited_user_dao import delete_invitations_created_more_than_two_days_ago
+from app.dao.invited_org_user_dao import (
+    delete_org_invitations_created_more_than_two_days_ago,
+)
+from app.dao.invited_user_dao import (
+    delete_invitations_created_more_than_two_days_ago,
+)
 from app.dao.jobs_dao import (
     dao_set_scheduled_jobs_to_pending,
+    dao_update_job,
     find_jobs_with_missing_rows,
-    find_missing_row_for_job
+    find_missing_row_for_job,
 )
-from app.dao.jobs_dao import dao_update_job
 from app.dao.notifications_dao import (
-    notifications_not_yet_sent,
-    dao_precompiled_letters_still_pending_virus_check,
     dao_old_letters_with_created_status,
-    letters_missing_from_sending_bucket,
+    dao_precompiled_letters_still_pending_virus_check,
     is_delivery_slow_for_providers,
+    letters_missing_from_sending_bucket,
+    notifications_not_yet_sent,
 )
 from app.dao.provider_details_dao import (
+    dao_adjust_provider_priority_back_to_resting_points,
     dao_reduce_sms_provider_priority,
-    dao_adjust_provider_priority_back_to_resting_points
+)
+from app.dao.services_dao import (
+    dao_find_services_sending_to_tv_numbers,
+    dao_find_services_with_high_failure_rates,
 )
 from app.dao.users_dao import delete_codes_older_created_more_than_a_day_ago
-from app.dao.services_dao import dao_find_services_sending_to_tv_numbers, dao_find_services_with_high_failure_rates
 from app.models import (
-    Job,
-    JOB_STATUS_IN_PROGRESS,
-    JOB_STATUS_ERROR,
-    SMS_TYPE,
     EMAIL_TYPE,
+    JOB_STATUS_ERROR,
+    JOB_STATUS_IN_PROGRESS,
+    JOB_STATUS_PENDING,
+    SMS_TYPE,
+    Job,
 )
 from app.notifications.process_notifications import send_notification_to_queue
 
 
 @notify_celery.task(name="run-scheduled-jobs")
-@statsd(namespace="tasks")
 def run_scheduled_jobs():
     try:
         for job in dao_set_scheduled_jobs_to_pending():
@@ -63,7 +65,6 @@ def run_scheduled_jobs():
 
 
 @notify_celery.task(name="delete-verify-codes")
-@statsd(namespace="tasks")
 def delete_verify_codes():
     try:
         start = datetime.utcnow()
@@ -77,7 +78,6 @@ def delete_verify_codes():
 
 
 @notify_celery.task(name="delete-invitations")
-@statsd(namespace="tasks")
 def delete_invitations():
     try:
         start = datetime.utcnow()
@@ -92,7 +92,6 @@ def delete_invitations():
 
 
 @notify_celery.task(name='switch-current-sms-provider-on-slow-delivery')
-@statsd(namespace="tasks")
 def switch_current_sms_provider_on_slow_delivery():
     """
     Reduce provider's priority if at least 30% of notifications took more than four minutes to be delivered
@@ -115,32 +114,42 @@ def switch_current_sms_provider_on_slow_delivery():
 
 
 @notify_celery.task(name='tend-providers-back-to-middle')
-@statsd(namespace='tasks')
 def tend_providers_back_to_middle():
     dao_adjust_provider_priority_back_to_resting_points()
 
 
 @notify_celery.task(name='check-job-status')
-@statsd(namespace="tasks")
 def check_job_status():
     """
     every x minutes do this check
     select
     from jobs
     where job_status == 'in progress'
-    and template_type in ('sms', 'email')
-    and scheduled_at or created_at is older that 30 minutes.
+    and processing started between 30 and 35 minutes ago
+    OR where the job_status == 'pending'
+    and the job scheduled_for timestamp is between 30 and 35 minutes ago.
     if any results then
-        raise error
+        update the job_status to 'error'
         process the rows in the csv that are missing (in another task) just do the check here.
     """
     thirty_minutes_ago = datetime.utcnow() - timedelta(minutes=30)
     thirty_five_minutes_ago = datetime.utcnow() - timedelta(minutes=35)
 
-    jobs_not_complete_after_30_minutes = Job.query.filter(
+    incomplete_in_progress_jobs = Job.query.filter(
         Job.job_status == JOB_STATUS_IN_PROGRESS,
-        and_(thirty_five_minutes_ago < Job.processing_started, Job.processing_started < thirty_minutes_ago)
-    ).order_by(Job.processing_started).all()
+        between(Job.processing_started, thirty_five_minutes_ago, thirty_minutes_ago)
+    )
+    incomplete_pending_jobs = Job.query.filter(
+        Job.job_status == JOB_STATUS_PENDING,
+        Job.scheduled_for.isnot(None),
+        between(Job.scheduled_for, thirty_five_minutes_ago, thirty_minutes_ago)
+    )
+
+    jobs_not_complete_after_30_minutes = incomplete_in_progress_jobs.union(
+        incomplete_pending_jobs
+    ).order_by(
+        Job.processing_started, Job.scheduled_for
+    ).all()
 
     # temporarily mark them as ERROR so that they don't get picked up by future check_job_status tasks
     # if they haven't been re-processed in time.
@@ -159,7 +168,6 @@ def check_job_status():
 
 
 @notify_celery.task(name='replay-created-notifications')
-@statsd(namespace="tasks")
 def replay_created_notifications():
     # if the notification has not be send after 1 hour, then try to resend.
     resend_created_notifications_older_than = (60 * 60)
@@ -193,7 +201,6 @@ def replay_created_notifications():
 
 
 @notify_celery.task(name='check-if-letters-still-pending-virus-check')
-@statsd(namespace="tasks")
 def check_if_letters_still_pending_virus_check():
     letters = dao_precompiled_letters_still_pending_virus_check()
 
@@ -215,7 +222,6 @@ def check_if_letters_still_pending_virus_check():
 
 
 @notify_celery.task(name='check-if-letters-still-in-created')
-@statsd(namespace="tasks")
 def check_if_letters_still_in_created():
     letters = dao_old_letters_with_created_status()
 
@@ -252,7 +258,6 @@ def check_for_missing_rows_in_completed_jobs():
 
 
 @notify_celery.task(name='check-for-services-with-high-failure-rates-or-sending-to-tv-numbers')
-@statsd(namespace="tasks")
 def check_for_services_with_high_failure_rates_or_sending_to_tv_numbers():
     start_date = (datetime.utcnow() - timedelta(days=1))
     end_date = datetime.utcnow()
@@ -297,15 +302,6 @@ def check_for_services_with_high_failure_rates_or_sending_to_tv_numbers():
                 message=message,
                 ticket_type=zendesk_client.TYPE_INCIDENT
             )
-
-
-@notify_celery.task(name='send-canary-to-cbc-proxy')
-def send_canary_to_cbc_proxy():
-    if current_app.config['CBC_PROXY_ENABLED']:
-        identifier = str(uuid.uuid4())
-        message = f"Sending a canary message to CBC proxy with ID {identifier}"
-        current_app.logger.info(message)
-        cbc_proxy_client.get_proxy('canary').send_canary(identifier)
 
 
 @notify_celery.task(name='trigger-link-tests')

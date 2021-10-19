@@ -1,35 +1,33 @@
 import pytest
-
 from freezegun import freeze_time
 from sqlalchemy.exc import IntegrityError
 
 from app import encryption
 from app.models import (
-    ServiceGuestList,
-    Notification,
-    SMS_TYPE,
-    MOBILE_TYPE,
     EMAIL_TYPE,
+    MOBILE_TYPE,
     NOTIFICATION_CREATED,
     NOTIFICATION_DELIVERED,
-    NOTIFICATION_SENDING,
-    NOTIFICATION_PENDING,
     NOTIFICATION_FAILED,
+    NOTIFICATION_PENDING,
+    NOTIFICATION_SENDING,
     NOTIFICATION_STATUS_LETTER_ACCEPTED,
     NOTIFICATION_STATUS_LETTER_RECEIVED,
     NOTIFICATION_STATUS_TYPES_FAILED,
     NOTIFICATION_TECHNICAL_FAILURE,
-    PRECOMPILED_TEMPLATE_NAME
+    PRECOMPILED_TEMPLATE_NAME,
+    SMS_TYPE,
+    Notification,
+    ServiceGuestList,
 )
-
 from tests.app.db import (
-    create_notification,
-    create_service,
     create_inbound_number,
-    create_reply_to_email,
     create_letter_contact,
+    create_notification,
+    create_reply_to_email,
+    create_service,
     create_template,
-    create_template_folder
+    create_template_folder,
 )
 
 
@@ -342,3 +340,27 @@ def test_template_folder_is_parent(sample_service):
     assert folders[0].is_parent_of(folders[4])
     assert folders[1].is_parent_of(folders[2])
     assert not folders[1].is_parent_of(folders[0])
+
+
+@pytest.mark.parametrize('is_platform_admin', (False, True))
+def test_user_can_use_webauthn_if_platform_admin(sample_user, is_platform_admin):
+    sample_user.platform_admin = is_platform_admin
+    assert sample_user.can_use_webauthn == is_platform_admin
+
+
+@pytest.mark.parametrize(('auth_type', 'can_use_webauthn'), [
+    ('email_auth', False),
+    ('sms_auth', False),
+    ('webauthn_auth', True)
+])
+def test_user_can_use_webauthn_if_they_login_with_it(sample_user, auth_type, can_use_webauthn):
+    sample_user.auth_type = auth_type
+    assert sample_user.can_use_webauthn == can_use_webauthn
+
+
+def test_user_can_use_webauthn_if_in_broadcast_org(sample_broadcast_service):
+    assert sample_broadcast_service.users[0].can_use_webauthn
+
+
+def test_user_can_use_webauthn_if_in_notify_team(notify_service):
+    assert notify_service.users[0].can_use_webauthn

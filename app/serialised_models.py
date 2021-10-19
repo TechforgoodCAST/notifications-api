@@ -3,6 +3,7 @@ from functools import partial
 from threading import RLock
 
 import cachetools
+from flask import current_app
 from notifications_utils.clients.redis import RequestCache
 from notifications_utils.serialised_model import (
     SerialisedModel,
@@ -11,7 +12,6 @@ from notifications_utils.serialised_model import (
 from werkzeug.utils import cached_property
 
 from app import db, redis_store
-
 from app.dao.api_key_dao import get_model_api_keys
 from app.dao.services_dao import dao_fetch_service_by_id
 
@@ -103,6 +103,10 @@ class SerialisedService(SerialisedModel):
     @cached_property
     def api_keys(self):
         return SerialisedAPIKeyCollection.from_service_id(self.id)
+
+    @property
+    def high_volume(self):
+        return self.id in current_app.config['HIGH_VOLUME_SERVICE']
 
 
 class SerialisedAPIKey(SerialisedModel):

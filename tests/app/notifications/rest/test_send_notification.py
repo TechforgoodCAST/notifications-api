@@ -1,34 +1,42 @@
 import random
 import string
-import pytest
 
-from flask import (json, current_app)
+import pytest
+from flask import current_app, json
 from freezegun import freeze_time
 from notifications_python_client.authentication import create_jwt_token
 from notifications_utils import SMS_CHAR_COUNT_LIMIT
 
 import app
 from app.dao import notifications_dao
-from app.models import (
-    SMS_TYPE, EMAIL_TYPE,
-    ApiKey, KEY_TYPE_NORMAL, KEY_TYPE_TEAM, KEY_TYPE_TEST, Notification, NotificationHistory
-)
-from app.dao.templates_dao import dao_get_all_templates_for_service, dao_update_template
-from app.dao.services_dao import dao_update_service
 from app.dao.api_key_dao import save_model_api_key
+from app.dao.services_dao import dao_update_service
+from app.dao.templates_dao import (
+    dao_get_all_templates_for_service,
+    dao_update_template,
+)
 from app.errors import InvalidRequest
-from app.models import Template
+from app.models import (
+    EMAIL_TYPE,
+    KEY_TYPE_NORMAL,
+    KEY_TYPE_TEAM,
+    KEY_TYPE_TEST,
+    SMS_TYPE,
+    ApiKey,
+    Notification,
+    NotificationHistory,
+    Template,
+)
 from app.service.send_notification import send_one_off_notification
 from app.v2.errors import RateLimitError
-
-from tests import create_authorization_header
+from tests import create_service_authorization_header
 from tests.app.db import (
     create_api_key,
     create_notification,
+    create_reply_to_email,
     create_service,
     create_service_guest_list,
     create_template,
-    create_reply_to_email,
 )
 
 
@@ -40,7 +48,7 @@ def test_create_notification_should_reject_if_missing_required_fields(notify_api
         with notify_api.test_client() as client:
             mocked = mocker.patch('app.celery.provider_tasks.deliver_{}.apply_async'.format(template_type))
             data = {}
-            auth_header = create_authorization_header(service_id=sample_api_key.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_api_key.service_id)
 
             response = client.post(
                 path='/notifications/{}'.format(template_type),
@@ -64,7 +72,7 @@ def test_should_reject_bad_phone_numbers(notify_api, sample_template, mocker):
                 'to': 'invalid',
                 'template': sample_template.id
             }
-            auth_header = create_authorization_header(service_id=sample_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
             response = client.post(
                 path='/notifications/sms',
@@ -91,7 +99,7 @@ def test_send_notification_invalid_template_id(notify_api, sample_template, mock
                 'to': to,
                 'template': fake_uuid
             }
-            auth_header = create_authorization_header(service_id=sample_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
             response = client.post(
                 path='/notifications/{}'.format(template_type),
@@ -118,7 +126,8 @@ def test_send_notification_with_placeholders_replaced(notify_api, sample_email_t
                     'name': 'Jo'
                 }
             }
-            auth_header = create_authorization_header(service_id=sample_email_template_with_placeholders.service.id)
+            auth_header = create_service_authorization_header(
+                service_id=sample_email_template_with_placeholders.service.id)
 
             response = client.post(
                 path='/notifications/email',
@@ -188,7 +197,7 @@ def test_send_notification_with_placeholders_replaced_with_unusual_types(
         ),
         headers=[
             ('Content-Type', 'application/json'),
-            create_authorization_header(service_id=sample_email_template_with_placeholders.service.id)
+            create_service_authorization_header(service_id=sample_email_template_with_placeholders.service.id)
         ]
     )
 
@@ -207,7 +216,7 @@ def test_should_not_send_notification_for_archived_template(notify_api, sample_t
                 'to': '+447700900855',
                 'template': sample_template.id
             })
-            auth_header = create_authorization_header(service_id=sample_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
             resp = client.post(
                 path='/notifications/sms',
@@ -238,7 +247,7 @@ def test_should_not_send_notification_if_restricted_and_not_a_service_user(notif
                 'template': template.id
             }
 
-            auth_header = create_authorization_header(service_id=template.service_id)
+            auth_header = create_service_authorization_header(service_id=template.service_id)
 
             response = client.post(
                 path='/notifications/{}'.format(template_type),
@@ -276,7 +285,7 @@ def test_should_send_notification_if_restricted_and_a_service_user(notify_api,
                 'template': template.id
             }
 
-            auth_header = create_authorization_header(service_id=template.service_id)
+            auth_header = create_service_authorization_header(service_id=template.service_id)
 
             response = client.post(
                 path='/notifications/{}'.format(template_type),
@@ -307,7 +316,7 @@ def test_should_not_allow_template_from_another_service(notify_api,
                 'template': service_2_templates[0].id
             }
 
-            auth_header = create_authorization_header(service_id=service_1.id)
+            auth_header = create_service_authorization_header(service_id=service_1.id)
 
             response = client.post(
                 path='/notifications/{}'.format(template_type),
@@ -332,7 +341,7 @@ def test_should_allow_valid_sms_notification(notify_api, sample_template, mocker
                 'template': str(sample_template.id)
             }
 
-            auth_header = create_authorization_header(service_id=sample_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
             response = client.post(
                 path='/notifications/sms',
@@ -359,7 +368,7 @@ def test_should_reject_email_notification_with_bad_email(notify_api, sample_emai
                 'to': to_address,
                 'template': str(sample_email_template.service_id)
             }
-            auth_header = create_authorization_header(service_id=sample_email_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_email_template.service_id)
 
             response = client.post(
                 path='/notifications/email',
@@ -384,7 +393,7 @@ def test_should_allow_valid_email_notification(notify_api, sample_email_template
                 'template': str(sample_email_template.id)
             }
 
-            auth_header = create_authorization_header(service_id=sample_email_template.service_id)
+            auth_header = create_service_authorization_header(service_id=sample_email_template.service_id)
 
             response = client.post(
                 path='/notifications/email',
@@ -426,7 +435,7 @@ def test_should_allow_api_call_if_under_day_limit_regardless_of_type(
                 'template': str(sms_template.id)
             }
 
-            auth_header = create_authorization_header(service_id=service.id)
+            auth_header = create_service_authorization_header(service_id=service.id)
 
             response = client.post(
                 path='/notifications/sms',
@@ -447,7 +456,7 @@ def test_should_not_return_html_in_body(notify_api, sample_service, mocker):
                 'template': str(email_template.id)
             }
 
-            auth_header = create_authorization_header(service_id=email_template.service_id)
+            auth_header = create_service_authorization_header(service_id=email_template.service_id)
             response = client.post(
                 path='/notifications/email',
                 data=json.dumps(data),
@@ -465,7 +474,8 @@ def test_should_not_send_email_if_team_api_key_and_not_a_service_user(notify_api
             'template': str(sample_email_template.id),
         }
 
-        auth_header = create_authorization_header(service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
+        auth_header = create_service_authorization_header(
+            service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
 
         response = client.post(
             path='/notifications/email',
@@ -491,7 +501,7 @@ def test_should_not_send_sms_if_team_api_key_and_not_a_service_user(notify_api, 
             'template': str(sample_template.id),
         }
 
-        auth_header = create_authorization_header(service_id=sample_template.service_id, key_type=KEY_TYPE_TEAM)
+        auth_header = create_service_authorization_header(service_id=sample_template.service_id, key_type=KEY_TYPE_TEAM)
 
         response = client.post(
             path='/notifications/sms',
@@ -515,7 +525,8 @@ def test_should_send_email_if_team_api_key_and_a_service_user(client, sample_ema
         'to': sample_email_template.service.created_by.email_address,
         'template': sample_email_template.id
     }
-    auth_header = create_authorization_header(service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
+    auth_header = create_service_authorization_header(
+        service_id=sample_email_template.service_id, key_type=KEY_TYPE_TEAM)
 
     response = client.post(
         path='/notifications/email',
@@ -731,7 +742,7 @@ def test_should_not_persist_notification_or_send_email_if_simulated_email(
         'template': sample_email_template.id
     }
 
-    auth_header = create_authorization_header(service_id=sample_email_template.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_email_template.service_id)
 
     response = client.post(
         path='/notifications/email',
@@ -760,7 +771,7 @@ def test_should_not_persist_notification_or_send_sms_if_simulated_number(
         'template': sample_template.id
     }
 
-    auth_header = create_authorization_header(service_id=sample_template.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
     response = client.post(
         path='/notifications/sms',
@@ -895,7 +906,7 @@ def test_should_error_if_notification_type_does_not_match_template_type(
         'to': to,
         'template': template.id
     }
-    auth_header = create_authorization_header(service_id=template.service_id)
+    auth_header = create_service_authorization_header(service_id=template.service_id)
     response = client.post("/notifications/{}".format(notification_type),
                            data=json.dumps(data),
                            headers=[('Content-Type', 'application/json'), auth_header])
@@ -971,7 +982,7 @@ def test_send_notification_uses_priority_queue_when_template_is_marked_as_priori
         'template': str(sample.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample.service_id)
+    auth_header = create_service_authorization_header(service_id=sample.service_id)
 
     response = client.post(
         path='/notifications/{}'.format(notification_type),
@@ -1009,7 +1020,7 @@ def test_returns_a_429_limit_exceeded_if_rate_limit_exceeded(
         'template': str(sample.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample.service_id)
+    auth_header = create_service_authorization_header(service_id=sample.service_id)
 
     response = client.post(
         path='/notifications/{}'.format(notification_type),
@@ -1034,7 +1045,7 @@ def test_should_allow_store_original_number_on_sms_notification(client, sample_t
         'template': str(sample_template.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample_template.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
     response = client.post(
         path='/notifications/sms',
@@ -1062,7 +1073,7 @@ def test_should_not_allow_sending_to_international_number_without_international_
         'template': str(sample_template.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample_template.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_template.service_id)
 
     response = client.post(
         path='/notifications/sms',
@@ -1089,7 +1100,7 @@ def test_should_allow_sending_to_crown_dependency_number_without_international_p
         'template': str(template.id)
     }
 
-    auth_header = create_authorization_header(service_id=service.id)
+    auth_header = create_service_authorization_header(service_id=service.id)
 
     response = client.post(
         path='/notifications/sms',
@@ -1110,7 +1121,7 @@ def test_should_allow_sending_to_international_number_with_international_permiss
         'template': str(template.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample_service_full_permissions.id)
+    auth_header = create_service_authorization_header(service_id=sample_service_full_permissions.id)
 
     response = client.post(
         path='/notifications/sms',
@@ -1132,7 +1143,7 @@ def test_should_not_allow_sms_notifications_if_service_permission_not_set(
         'template': str(sample_template_without_sms_permission.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample_template_without_sms_permission.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_template_without_sms_permission.service_id)
 
     response = client.post(
         path='/notifications/sms',
@@ -1159,7 +1170,7 @@ def test_should_not_allow_email_notifications_if_service_permission_not_set(
         'template': str(sample_template_without_email_permission.id)
     }
 
-    auth_header = create_authorization_header(service_id=sample_template_without_email_permission.service_id)
+    auth_header = create_service_authorization_header(service_id=sample_template_without_email_permission.service_id)
 
     response = client.post(
         path='/notifications/email',
@@ -1179,7 +1190,7 @@ def test_should_not_allow_email_notifications_if_service_permission_not_set(
     [("letter", "letter notification type is not supported, please use the latest version of the client"),
      ("apple", "apple notification type is not supported")])
 def test_should_throw_exception_if_notification_type_is_invalid(client, sample_service, notification_type, err_msg):
-    auth_header = create_authorization_header(service_id=sample_service.id)
+    auth_header = create_service_authorization_header(service_id=sample_service.id)
     response = client.post(
         path='/notifications/{}'.format(notification_type),
         data={},
@@ -1209,7 +1220,7 @@ def test_post_notification_should_set_reply_to_text(client, sample_service, mock
     response = client.post("/notifications/{}".format(notification_type),
                            data=json.dumps(data),
                            headers=[('Content-Type', 'application/json'),
-                                    create_authorization_header(service_id=sample_service.id)]
+                                    create_service_authorization_header(service_id=sample_service.id)]
                            )
     assert response.status_code == 201
     notifications = Notification.query.all()
@@ -1241,3 +1252,27 @@ def test_send_notification_should_send_international_letters(
     notification = Notification.query.get(notification_id['id'])
     assert notification.postage == expected_postage
     assert notification.international == expected_international
+
+
+@pytest.mark.parametrize('reference_paceholder,', [None, 'ref2'])
+def test_send_notification_should_set_client_reference_from_placeholder(
+    sample_letter_template, mocker, reference_paceholder
+):
+    deliver_mock = mocker.patch('app.celery.tasks.letters_pdf_tasks.get_pdf_for_templated_letter.apply_async')
+    data = {
+        'template_id': sample_letter_template.id,
+        'personalisation': {
+            'address_line_1': 'Jane',
+            'address_line_2': 'Moss Lane',
+            'address_line_3': 'SW1A 1AA',
+        },
+        'to': 'Jane',
+        'created_by': sample_letter_template.service.created_by_id
+    }
+    if reference_paceholder:
+        data['personalisation']['reference'] = reference_paceholder
+
+    notification_id = send_one_off_notification(sample_letter_template.service_id, data)
+    assert deliver_mock.called
+    notification = Notification.query.get(notification_id['id'])
+    assert notification.client_reference == reference_paceholder
